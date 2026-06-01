@@ -1,0 +1,245 @@
+"""
+Rule-based signal engine — Phase 1 implementation.
+
+Five-condition confluence:
+  C1 trend     : D1 close on the correct side of D1 SMA(SIGNAL_TREND_SMA_PERIOD)
+  C2 rsi       : H4 RSI(14) inside the configured pullback band
+  C3 structure : H4 latest candle within SIGNAL_STRUCTURE_ATR_BUFFER * ATR(14)
+                 of a recent swing low (BUY) or swing high (SELL)
+  C4 session   : current UTC session in SIGNAL_SESSION_FILTER
+  C5 spread    : current spread (pips) below SIGNAL_MAX_SPREAD_PIPS
+
+Score is sum of conditions met. Signal fires when score >= SIGNAL_MIN_CONFLUENCE_SCORE.
+If both BUY and SELL clear the threshold the signal is suppressed (ambiguous).
+
+Gating (before any scoring):
+  - Cooldown: any non-EXPIRED/REJECTED signal for this instrument inside the last
+    SIGNAL_COOLDOWN_BARS_AFTER_CLOSE * 4 hours blocks evaluation.
+  - Pre-weekend: within SIGNAL_NO_TRADE_HOURS_BEFORE_FRIDAY_CLOSE hours of
+    Friday 22:00 UTC, evaluation is skipped.
+
+Entry/stop/target:
+  BUY  : entry = tick.ask, stop = entry - (SIGNAL_STOP_ATR_MULTIPLIER * atr14)
+  SELL : entry = tick.bid, stop = entry + (SIGNAL_STOP_ATR_MULTIPLIER * atr14)
+  target distance = MIN_RR_RATIO * |entry - stop|
+"""
+from __future__ import annotations
+
+import logging
+from datetime import datetime, timedelta
+from typing import Optional
+
+from sqlalchemy.orm import Session
+
+from app.config import Settings
+from app.models.candle import Candle
+from app.models.indicator import Indicator
+from app.models.instrument import Instrument
+from app.models.signal import Signal
+from app.services.price_stream import get_latest_price
+from app.services.session_classifier import classify_session
+from app.services.signal_engine.base import SignalEngine, SignalOutput
+
+logger = logging.getLogger(__name__)
+
+_H4_HOURS = 4
+_BLOCKING_STATUSES = ("PENDING", "APPROVED", "EXECUTED")
+
+
+class RuleBasedSignalEngine(SignalEngine):
+    def evaluate(
+        self,
+        instrument: str,
+        granularity: str,
+        db: Session,
+        settings: Settings,
+    ) -> Optional[SignalOutput]:
+        inst = db.query(Instrument).filter_by(symbol=instrument).first()
+        if inst is None:
+            logger.debug("evaluate: instrument %s not in DB", instrument)
+            return None
+
+        now_utc = datetime.utcnow()
+
+        # ── Gate: cooldown ────────────────────────────────────────────────────
+        cooldown_hours = settings.SIGNAL_COOLDOWN_BARS_AFTER_CLOSE * _H4_HOURS
+        cooldown_cutoff = now_utc - timedelta(hours=cooldown_hours)
+        recent = (
+            db.query(Signal)
+            .filter(Signal.instrument_id == inst.id)
+            .filter(Signal.status.in_(_BLOCKING_STATUSES))
+            .filter(Signal.created_at >= cooldown_cutoff)
+            .first()
+        )
+        if recent is not None:
+            logger.debug("evaluate %s: cooldown — recent signal id=%s", instrument, recent.id)
+            return None
+
+        # ── Gate: pre-weekend ────────────────────────────────────────────────
+        if _within_pre_friday_window(now_utc, settings.SIGNAL_NO_TRADE_HOURS_BEFORE_FRIDAY_CLOSE):
+            logger.debug("evaluate %s: pre-Friday close cutoff", instrument)
+            return None
+
+        # ── Load H4 candles + indicator ──────────────────────────────────────
+        h4_candles = (
+            db.query(Candle)
+            .filter_by(instrument_id=inst.id, granularity=granularity)
+            .order_by(Candle.timestamp.desc())
+            .limit(100)
+            .all()
+        )
+        if len(h4_candles) < 20:
+            logger.debug("evaluate %s: insufficient %s candles (%d)", instrument, granularity, len(h4_candles))
+            return None
+        h4_candles.reverse()  # ascending
+        latest_h4 = h4_candles[-1]
+
+        latest_ind = (
+            db.query(Indicator)
+            .filter_by(instrument_id=inst.id, granularity=granularity)
+            .order_by(Indicator.timestamp.desc())
+            .first()
+        )
+        if latest_ind is None or latest_ind.atr14 is None or latest_ind.rsi14 is None:
+            logger.debug("evaluate %s: missing ATR/RSI indicator", instrument)
+            return None
+        atr14 = latest_ind.atr14
+        rsi14 = latest_ind.rsi14
+
+        # ── Load D1 trend ────────────────────────────────────────────────────
+        sma_period = settings.SIGNAL_TREND_SMA_PERIOD
+        d1_candles = (
+            db.query(Candle)
+            .filter_by(instrument_id=inst.id, granularity=settings.SIGNAL_TREND_TIMEFRAME)
+            .order_by(Candle.timestamp.desc())
+            .limit(sma_period)
+            .all()
+        )
+        if len(d1_candles) < sma_period:
+            logger.debug(
+                "evaluate %s: insufficient %s candles for SMA%d (%d)",
+                instrument,
+                settings.SIGNAL_TREND_TIMEFRAME,
+                sma_period,
+                len(d1_candles),
+            )
+            return None
+        d1_sma = sum(c.close for c in d1_candles) / len(d1_candles)
+        d1_last_close = d1_candles[0].close  # newest
+
+        # ── Live tick ────────────────────────────────────────────────────────
+        tick = get_latest_price(instrument)
+        if tick is None:
+            logger.debug("evaluate %s: no tick in cache", instrument)
+            return None
+
+        # ── Common conditions ────────────────────────────────────────────────
+        session = classify_session(now_utc)
+        allowed_sessions = {s.strip().lower() for s in settings.SIGNAL_SESSION_FILTER.split(",") if s.strip()}
+        c4_session_ok = session in allowed_sessions
+
+        spread = tick.ask - tick.bid
+        spread_pips = spread / inst.pip_size if inst.pip_size else float("inf")
+        c5_spread_ok = spread_pips < settings.SIGNAL_MAX_SPREAD_PIPS
+
+        # Recent swing context (look back over last 20 indicator rows for this instrument)
+        recent_indicators = (
+            db.query(Indicator)
+            .filter_by(instrument_id=inst.id, granularity=granularity)
+            .order_by(Indicator.timestamp.desc())
+            .limit(20)
+            .all()
+        )
+        recent_swing_lows = [ind.swing_low for ind in recent_indicators if ind.swing_low is not None]
+        recent_swing_highs = [ind.swing_high for ind in recent_indicators if ind.swing_high is not None]
+
+        atr_buffer = settings.SIGNAL_STRUCTURE_ATR_BUFFER * atr14
+
+        # ── Score BUY ────────────────────────────────────────────────────────
+        buy_c1_trend = d1_last_close > d1_sma
+        buy_c2_rsi = settings.SIGNAL_RSI_OVERSOLD <= rsi14 <= settings.SIGNAL_RSI_OVERBOUGHT
+        buy_c3_structure = any(
+            abs(latest_h4.low - sl) <= atr_buffer for sl in recent_swing_lows
+        )
+        buy_breakdown = {
+            "trend": buy_c1_trend,
+            "rsi": buy_c2_rsi,
+            "structure": buy_c3_structure,
+            "session": c4_session_ok,
+            "spread": c5_spread_ok,
+        }
+        buy_score = sum(1 for v in buy_breakdown.values() if v)
+
+        # ── Score SELL ───────────────────────────────────────────────────────
+        sell_c1_trend = d1_last_close < d1_sma
+        sell_c2_rsi = (
+            settings.SIGNAL_RSI_OVERSOLD_SELL <= rsi14 <= settings.SIGNAL_RSI_OVERBOUGHT_SELL
+        )
+        sell_c3_structure = any(
+            abs(latest_h4.high - sh) <= atr_buffer for sh in recent_swing_highs
+        )
+        sell_breakdown = {
+            "trend": sell_c1_trend,
+            "rsi": sell_c2_rsi,
+            "structure": sell_c3_structure,
+            "session": c4_session_ok,
+            "spread": c5_spread_ok,
+        }
+        sell_score = sum(1 for v in sell_breakdown.values() if v)
+
+        threshold = settings.SIGNAL_MIN_CONFLUENCE_SCORE
+
+        buy_pass = buy_score >= threshold
+        sell_pass = sell_score >= threshold
+
+        if buy_pass and sell_pass:
+            logger.debug("evaluate %s: ambiguous (buy=%d sell=%d)", instrument, buy_score, sell_score)
+            return None
+        if not buy_pass and not sell_pass:
+            logger.debug("evaluate %s: below threshold (buy=%d sell=%d, min=%d)",
+                         instrument, buy_score, sell_score, threshold)
+            return None
+
+        stop_distance = settings.SIGNAL_STOP_ATR_MULTIPLIER * atr14
+        if buy_pass:
+            direction = "BUY"
+            entry = tick.ask
+            stop = entry - stop_distance
+            target = entry + settings.MIN_RR_RATIO * stop_distance
+            breakdown = buy_breakdown
+            score = buy_score
+        else:
+            direction = "SELL"
+            entry = tick.bid
+            stop = entry + stop_distance
+            target = entry - settings.MIN_RR_RATIO * stop_distance
+            breakdown = sell_breakdown
+            score = sell_score
+
+        return SignalOutput(
+            instrument=instrument,
+            granularity=granularity,
+            direction=direction,
+            entry=entry,
+            stop=stop,
+            target=target,
+            confidence_score=score,
+            score_breakdown=breakdown,
+        )
+
+
+def _within_pre_friday_window(now_utc: datetime, hours_before_close: int) -> bool:
+    """
+    True if now_utc is within `hours_before_close` of the next Friday 22:00 UTC.
+    Friday close is the standard FX week close (Sun 22:00 UTC open, Fri 22:00 UTC close).
+    """
+    # weekday(): Mon=0 ... Sun=6 — Friday is 4.
+    days_until_friday = (4 - now_utc.weekday()) % 7
+    friday_close = (now_utc + timedelta(days=days_until_friday)).replace(
+        hour=22, minute=0, second=0, microsecond=0
+    )
+    if friday_close < now_utc:
+        # we're past this week's Friday close — look at next week
+        friday_close += timedelta(days=7)
+    delta = friday_close - now_utc
+    return delta <= timedelta(hours=hours_before_close)
