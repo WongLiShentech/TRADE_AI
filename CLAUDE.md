@@ -20,7 +20,7 @@ Personal algorithmic trading platform. Swing trading focus (H4/D1). Starting fro
 |---|---|
 | Frontend | React + Vite + TypeScript + Tailwind CSS + Recharts + React Router |
 | Backend | FastAPI + SQLAlchemy + Alembic + Pydantic + pydantic-settings |
-| Database | SQLite (dev) → PostgreSQL (prod) |
+| Database | PostgreSQL (dev via Docker + prod) — migrated from SQLite 2026-06-02 (Pre-M7 Step 1) |
 | ML | Python + scikit-learn + pandas + XGBoost |
 | Auth | JWT (access + refresh tokens) |
 | Config | pydantic-settings (all env-driven, zero defaults) |

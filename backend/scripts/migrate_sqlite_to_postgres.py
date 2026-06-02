@@ -13,7 +13,7 @@ import os
 import sys
 
 import pandas as pd
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import Boolean, create_engine, inspect, text
 
 SQLITE_URL = "sqlite:///./data/trading.db"
 PG_URL = os.environ.get(
@@ -21,12 +21,15 @@ PG_URL = os.environ.get(
 )
 
 TABLES_IN_ORDER = [
-    "instruments",
-    "candles",
-    "equity_points",
-    "signals",
-    "trades",
-    "backtest_runs",
+    "instruments",      # no FK — must be first (others reference it)
+    "candles",          # FK -> instruments
+    "indicators",       # FK -> instruments
+    "signals",          # FK -> instruments
+    "orders",           # FK -> instruments, signals
+    "trades",           # FK -> instruments
+    "equity_points",    # no FK
+    "backtest_runs",    # FK -> instruments
+    "bot_state",        # no FK — singleton row
 ]
 
 BATCH_SIZE = 1_000
@@ -57,6 +60,20 @@ def migrate() -> None:
             print(f"  {table}: 0 rows in SQLite, nothing to copy")
             continue
 
+        # SQLite stores booleans as integers (0/1). Postgres has a strict
+        # BOOLEAN type that rejects integers. Convert any column that is
+        # BOOLEAN in the Postgres schema from int -> bool before inserting.
+        bool_cols = [
+            col["name"]
+            for col in inspect(pg).get_columns(table)
+            if isinstance(col["type"], Boolean)
+        ]
+        for col in bool_cols:
+            if col in df.columns:
+                df[col] = df[col].apply(
+                    lambda v: bool(v) if pd.notna(v) else None
+                )
+
         with pg.begin() as conn:
             conn.execute(text(f"TRUNCATE TABLE {table} CASCADE"))
 
@@ -73,7 +90,28 @@ def migrate() -> None:
             print(f"    WARNING: counts differ — investigate before proceeding")
             sys.exit(1)
 
+    _reset_sequences(pg)
     print("\nMigration complete.")
+
+
+def _reset_sequences(pg) -> None:
+    """
+    Postgres auto-increment sequences are NOT advanced by inserts that supply an
+    explicit id (which `to_sql` does). Without this, the next app insert reuses
+    id=1 and hits a UniqueViolation on the primary key. Reset each table's
+    sequence to its current MAX(id) so new inserts continue from there.
+    """
+    print("\nResetting id sequences...")
+    for table in TABLES_IN_ORDER:
+        with pg.begin() as conn:
+            conn.execute(
+                text(
+                    f"SELECT setval(pg_get_serial_sequence('{table}', 'id'), "  # noqa: S608
+                    f"COALESCE((SELECT MAX(id) FROM {table}), 1), "
+                    f"(SELECT MAX(id) FROM {table}) IS NOT NULL)"
+                )
+            )
+    print(f"  reset sequences for {len(TABLES_IN_ORDER)} tables")
 
 
 if __name__ == "__main__":

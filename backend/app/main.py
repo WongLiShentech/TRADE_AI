@@ -22,7 +22,9 @@ settings = get_settings()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    Base.metadata.create_all(bind=engine)
+    # Schema is created and migrated by Alembic (`alembic upgrade head`), not by
+    # create_all(). Run migrations before starting the app (dev: manually; prod:
+    # as a release/deploy step). This keeps Alembic the single source of truth.
     _ensure_bot_state_row()
     start_scheduler()
 
