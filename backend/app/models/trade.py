@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import JSON, DateTime, Float, ForeignKey, Integer, String
+from sqlalchemy import JSON, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -8,6 +8,20 @@ from app.database import Base
 
 class Trade(Base):
     __tablename__ = "trades"
+
+    # M8-Shadow Phase 2 idempotency backstop: exactly one shadow row per
+    # (instrument, signal_time). PARTIAL — backtest rows are deliberately not
+    # constrained (a backtest re-run legitimately repeats the pair).
+    # See migration 20260801_shadow_trade_unique + services/shadow/recorder.py.
+    __table_args__ = (
+        Index(
+            "uq_trades_shadow_natural_key",
+            "instrument_id",
+            "opened_at",
+            unique=True,
+            postgresql_where=text("stage = 'shadow'"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
     instrument_id: Mapped[int] = mapped_column(ForeignKey("instruments.id"), nullable=False, index=True)
@@ -27,6 +41,11 @@ class Trade(Base):
     stage: Mapped[str] = mapped_column(String, nullable=False, index=True)         # backtest | sandbox | live
     outcome: Mapped[str | None] = mapped_column(String, nullable=True)             # win | loss | breakeven
     exit_reason: Mapped[str | None] = mapped_column(String, nullable=True)         # tp_hit | sl_hit | trailing_stop | time_exit
+    # True when the simulator resolved the exit via SL-first tie-break (M1 bar hit both
+    # barriers) or the degraded H4/mid fallback (no M1 for the window). Enables relabel.
+    ambiguous_resolution: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
     opened_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
@@ -36,6 +55,12 @@ class Trade(Base):
     session: Mapped[str | None] = mapped_column(String, nullable=True, index=True) # asian | london | ny | overlap
     stop_method: Mapped[str | None] = mapped_column(String, nullable=True)         # atr | structure | trailing
     news_events: Mapped[list | None] = mapped_column(JSON, nullable=True)          # events found within ±NEWS_CALENDAR_WINDOW_HOURS
+
+    # M8-Shadow — ML inference decision recorded at signal time (shadow rows use
+    # stage='shadow' and NEVER place an order). Nullable: rule-only rows leave them NULL.
+    ml_probability: Mapped[float | None] = mapped_column(Float, nullable=True)   # model P(win), 0.0–1.0
+    ml_decision: Mapped[str | None] = mapped_column(String, nullable=True)       # take | skip
+    ml_model_id: Mapped[str | None] = mapped_column(String, nullable=True)       # artifact stem that scored it (provenance)
 
     # Part 4a — auto-classification with confidence
     auto_classification: Mapped[str | None] = mapped_column(String, nullable=True, index=True)  # STRATEGY | NEWS | MANIPULATION | MANUAL | UNCERTAIN

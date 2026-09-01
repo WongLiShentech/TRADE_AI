@@ -5,7 +5,8 @@
       "Read(//c/Users/wongl/.claude/channels/**)",
       "PowerShell(Remove-Item \"$env:USERPROFILE\\\\.vscode\\\\extensions\\\\anthropic.claude-code-2.1.141-win32-x64\" -Recurse -Force -ErrorAction Stop; Write-Output \"Deleted successfully\")",
       "PowerShell(& \"C:\\\\Users\\\\wongl\\\\AppData\\\\Local\\\\Programs\\\\Microsoft VS Code\\\\bin\\\\code.cmd\" --install-extension anthropic.claude-code --force 2>&1)",
-      "Bash(find \"/c/Users/wongl\" -maxdepth 8 -path \"*/extensions/anthropic.claude-code*\" -type d 2>/dev/null | head -10)"
+      "Bash(find \"/c/Users/wongl\" -maxdepth 8 -path \"*/extensions/anthropic.claude-code*\" -type d 2>/dev/null | head -10)",
+      "Bash(docker compose *)"
     ]
   }
 }

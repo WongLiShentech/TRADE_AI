@@ -1,0 +1,34 @@
+INFO:     Started server process [22132]
+INFO:     Waiting for application startup.
+INFO:     apscheduler.scheduler — Adding job tentatively -- it will be properly scheduled when the scheduler starts
+INFO:     apscheduler.scheduler — Adding job tentatively -- it will be properly scheduled when the scheduler starts
+INFO:     apscheduler.scheduler — Adding job tentatively -- it will be properly scheduled when the scheduler starts
+INFO:     apscheduler.scheduler — Adding job tentatively -- it will be properly scheduled when the scheduler starts
+INFO:     apscheduler.scheduler — Adding job tentatively -- it will be properly scheduled when the scheduler starts
+INFO:     apscheduler.scheduler — Adding job tentatively -- it will be properly scheduled when the scheduler starts
+INFO:     apscheduler.scheduler — Adding job tentatively -- it will be properly scheduled when the scheduler starts
+INFO:     apscheduler.scheduler — Adding job tentatively -- it will be properly scheduled when the scheduler starts
+INFO:     apscheduler.scheduler — Added job "_weekly_chain" to job store "default"
+INFO:     apscheduler.scheduler — Added job "_daily_circuit_breaker" to job store "default"
+INFO:     apscheduler.scheduler — Added job "_make_trailing_window_job.<locals>._job" to job store "default"
+INFO:     apscheduler.scheduler — Added job "_make_candle_close_job.<locals>._job" to job store "default"
+INFO:     apscheduler.scheduler — Added job "_make_candle_refresh_job.<locals>._job" to job store "default"
+INFO:     apscheduler.scheduler — Added job "_shadow_resolver" to job store "default"
+INFO:     apscheduler.scheduler — Added job "_weekly_fundamentals" to job store "default"
+INFO:     apscheduler.scheduler — Added job "_intraday_fundamentals" to job store "default"
+INFO:     apscheduler.scheduler — Scheduler started
+INFO:     app.services.scheduler — scheduler started; jobs: weekly_chain (Sun 00:00), daily_circuit_breaker (00:00), weekly_fundamentals (Sun 22:00), intraday_fundamentals (*/4h), shadow_outcome_resolver (*/1h at :35), candle jobs: M1@*:20 (trailing 6h B/A), H4@1,5,9,13,17,21:01, D@23:05 (refresh-only)
+INFO:     app.services.price_stream — price stream starting for 10 instruments
+INFO:     app.main — price stream started for 10 instruments
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+INFO:     httpx — HTTP Request: GET https://stream-fxpractice.oanda.com/v3/accounts/101-003-39159710-001/pricing/stream?instruments=EUR_USD%2CUSD_CHF%2CEUR_JPY%2CUSD_JPY%2CGBP_JPY%2CAUD_USD%2CGBP_USD%2CUSD_CAD%2CEUR_GBP%2CNZD_USD&snapshot=true "HTTP/1.1 520 <none>"
+WARNING:     app.services.price_stream — price stream disconnected (attempt 1/10): Server error '520 <none>' for url 'https://stream-fxpractice.oanda.com/v3/accounts/101-003-39159710-001/pricing/stream?instruments=EUR_USD%2CUSD_CHF%2CEUR_JPY%2CUSD_JPY%2CGBP_JPY%2CAUD_USD%2CGBP_USD%2CUSD_CAD%2CEUR_GBP%2CNZD_USD&snapshot=true'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/520
+INFO:     httpx — HTTP Request: GET https://stream-fxpractice.oanda.com/v3/accounts/101-003-39159710-001/pricing/stream?instruments=EUR_USD%2CUSD_CHF%2CEUR_JPY%2CUSD_JPY%2CGBP_JPY%2CAUD_USD%2CGBP_USD%2CUSD_CAD%2CEUR_GBP%2CNZD_USD&snapshot=true "HTTP/1.1 307 Temporary Redirect"
+WARNING:     app.services.price_stream — price stream disconnected (attempt 2/10): Redirect response '307 Temporary Redirect' for url 'https://stream-fxpractice.oanda.com/v3/accounts/101-003-39159710-001/pricing/stream?instruments=EUR_USD%2CUSD_CHF%2CEUR_JPY%2CUSD_JPY%2CGBP_JPY%2CAUD_USD%2CGBP_USD%2CUSD_CAD%2CEUR_GBP%2CNZD_USD&snapshot=true'
+Redirect location: '/v3/accounts/101-003-39159710-001/pricing/stream?instruments=EUR_USD%2CUSD_CHF%2CEUR_JPY%2CUSD_JPY%2CGBP_JPY%2CAUD_USD%2CGBP_USD%2CUSD_CAD%2CEUR_GBP%2CNZD_USD&snapshot=true'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/307
+INFO:     httpx — HTTP Request: GET https://stream-fxpractice.oanda.com/v3/accounts/101-003-39159710-001/pricing/stream?instruments=EUR_USD%2CUSD_CHF%2CEUR_JPY%2CUSD_JPY%2CGBP_JPY%2CAUD_USD%2CGBP_USD%2CUSD_CAD%2CEUR_GBP%2CNZD_USD&snapshot=true "HTTP/1.1 520 <none>"
+WARNING:     app.services.price_stream — price stream disconnected (attempt 3/10): Server error '520 <none>' for url 'https://stream-fxpractice.oanda.com/v3/accounts/101-003-39159710-001/pricing/stream?instruments=EUR_USD%2CUSD_CHF%2CEUR_JPY%2CUSD_JPY%2CGBP_JPY%2CAUD_USD%2CGBP_USD%2CUSD_CAD%2CEUR_GBP%2CNZD_USD&snapshot=true'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/520

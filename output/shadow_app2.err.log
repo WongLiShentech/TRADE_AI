@@ -1,0 +1,164 @@
+INFO:     Started server process [18652]
+INFO:     Waiting for application startup.
+INFO:     apscheduler.scheduler — Adding job tentatively -- it will be properly scheduled when the scheduler starts
+INFO:     apscheduler.scheduler — Adding job tentatively -- it will be properly scheduled when the scheduler starts
+INFO:     apscheduler.scheduler — Adding job tentatively -- it will be properly scheduled when the scheduler starts
+INFO:     apscheduler.scheduler — Adding job tentatively -- it will be properly scheduled when the scheduler starts
+INFO:     apscheduler.scheduler — Adding job tentatively -- it will be properly scheduled when the scheduler starts
+INFO:     apscheduler.scheduler — Adding job tentatively -- it will be properly scheduled when the scheduler starts
+INFO:     apscheduler.scheduler — Adding job tentatively -- it will be properly scheduled when the scheduler starts
+INFO:     apscheduler.scheduler — Adding job tentatively -- it will be properly scheduled when the scheduler starts
+INFO:     apscheduler.scheduler — Added job "_weekly_chain" to job store "default"
+INFO:     apscheduler.scheduler — Added job "_daily_circuit_breaker" to job store "default"
+INFO:     apscheduler.scheduler — Added job "_make_trailing_window_job.<locals>._job" to job store "default"
+INFO:     apscheduler.scheduler — Added job "_make_candle_close_job.<locals>._job" to job store "default"
+INFO:     apscheduler.scheduler — Added job "_make_candle_refresh_job.<locals>._job" to job store "default"
+INFO:     apscheduler.scheduler — Added job "_shadow_resolver" to job store "default"
+INFO:     apscheduler.scheduler — Added job "_weekly_fundamentals" to job store "default"
+INFO:     apscheduler.scheduler — Added job "_intraday_fundamentals" to job store "default"
+INFO:     apscheduler.scheduler — Scheduler started
+INFO:     app.services.scheduler — scheduler started; jobs: weekly_chain (Sun 00:00), daily_circuit_breaker (00:00), weekly_fundamentals (Sun 22:00), intraday_fundamentals (*/4h), shadow_outcome_resolver (*/1h at :35), candle jobs: M1@*:20 (trailing 6h B/A), H4@1,5,9,13,17,21:01, D@23:05 (refresh-only)
+INFO:     app.services.price_stream — price stream starting for 10 instruments
+INFO:     app.main — price stream started for 10 instruments
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+INFO:     httpx — HTTP Request: GET https://stream-fxpractice.oanda.com/v3/accounts/101-003-39159710-001/pricing/stream?instruments=EUR_USD%2CUSD_CHF%2CEUR_JPY%2CUSD_JPY%2CGBP_JPY%2CAUD_USD%2CGBP_USD%2CUSD_CAD%2CEUR_GBP%2CNZD_USD&snapshot=true "HTTP/1.1 200 OK"
+INFO:     apscheduler.executors.default — Running job "_make_candle_close_job.<locals>._job (trigger: cron[hour='1,5,9,13,17,21', minute='1'], next run at: 2026-08-05 13:01:00 UTC)" (scheduled at 2026-08-05 13:01:00+00:00)
+INFO:     app.services.ml.inference — loaded ML artifact model_id=s1_xgb_v2_c430d22dd1ab.NOT_PROMOTED schema_v=2 promoted=False features=19
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/EUR_USD/candles?granularity=H4&from=2026-08-03T05%3A00%3A00Z&to=2026-08-05T13%3A01%3A02Z&price=M "HTTP/1.1 200 OK"
+INFO:     app.services.pipeline — signal rejected: EUR_USD reason=INSUFFICIENT_RR
+INFO:     app.services.shadow.recorder — shadow recorded: EUR_USD H4 BUY p=0.2778 decision=take risk=reject:INSUFFICIENT_RR model=s1_xgb_v2_c430d22dd1ab.NOT_PROMOTED nan_model_features=0
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/USD_CHF/candles?granularity=H4&from=2026-08-03T05%3A00%3A00Z&to=2026-08-05T13%3A01%3A04Z&price=M "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles?granularity=H4&from=2026-08-03T05%3A00%3A00Z&to=2026-08-05T13%3A01%3A06Z&price=M "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/USD_JPY/candles?granularity=H4&from=2026-08-03T05%3A00%3A00Z&to=2026-08-05T13%3A01%3A09Z&price=M "HTTP/1.1 200 OK"
+INFO:     app.services.pipeline — signal rejected: USD_JPY reason=INSUFFICIENT_RR
+INFO:     app.services.shadow.recorder — shadow recorded: USD_JPY H4 SELL p=0.1816 decision=skip risk=reject:INSUFFICIENT_RR model=s1_xgb_v2_c430d22dd1ab.NOT_PROMOTED nan_model_features=0
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/GBP_JPY/candles?granularity=H4&from=2026-08-03T05%3A00%3A00Z&to=2026-08-05T13%3A01%3A11Z&price=M "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/AUD_USD/candles?granularity=H4&from=2026-08-03T05%3A00%3A00Z&to=2026-08-05T13%3A01%3A13Z&price=M "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/accounts/101-003-39159710-001/pricing?instruments=AUD_USD&includeHomeConversions=true "HTTP/1.1 200 OK"
+INFO:     app.services.pipeline — signal approved: AUD_USD H4 BUY score=3 units=612
+INFO:     app.services.shadow.recorder — shadow recorded: AUD_USD H4 BUY p=0.2359 decision=take risk=pass model=s1_xgb_v2_c430d22dd1ab.NOT_PROMOTED nan_model_features=0
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles?granularity=H4&from=2026-08-03T05%3A00%3A00Z&to=2026-08-05T13%3A01%3A16Z&price=M "HTTP/1.1 200 OK"
+INFO:     app.services.pipeline — signal rejected: GBP_USD reason=INSUFFICIENT_RR
+INFO:     app.services.shadow.recorder — shadow recorded: GBP_USD H4 BUY p=0.2523 decision=take risk=reject:INSUFFICIENT_RR model=s1_xgb_v2_c430d22dd1ab.NOT_PROMOTED nan_model_features=0
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles?granularity=H4&from=2026-08-03T05%3A00%3A00Z&to=2026-08-05T13%3A01%3A17Z&price=M "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles?granularity=H4&from=2026-08-03T05%3A00%3A00Z&to=2026-08-05T13%3A01%3A19Z&price=M "HTTP/1.1 200 OK"
+INFO:     app.services.pipeline — signal rejected: EUR_GBP reason=INSUFFICIENT_RR
+INFO:     app.services.shadow.recorder — shadow recorded: EUR_GBP H4 SELL p=0.0643 decision=skip risk=reject:INSUFFICIENT_RR model=s1_xgb_v2_c430d22dd1ab.NOT_PROMOTED nan_model_features=0
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles?granularity=H4&from=2026-08-03T05%3A00%3A00Z&to=2026-08-05T13%3A01%3A20Z&price=M "HTTP/1.1 200 OK"
+INFO:     app.services.pipeline — pipeline complete: {'granularity': 'H4', 'fetched': 140, 'computed': 140, 'signals': 1, 'rejected': 4, 'errors': 0, 'evaluated': 10, 'shadow_recorded': 5, 'shadow_errors': 0, 'expired': 0, 'shadow_enabled': True}
+INFO:     apscheduler.executors.default — Job "_make_candle_close_job.<locals>._job (trigger: cron[hour='1,5,9,13,17,21', minute='1'], next run at: 2026-08-05 17:01:00 UTC)" executed successfully
+INFO:     apscheduler.executors.default — Running job "_make_trailing_window_job.<locals>._job (trigger: cron[hour='*', minute='20'], next run at: 2026-08-05 14:20:00 UTC)" (scheduled at 2026-08-05 13:20:00+00:00)
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/EUR_USD/candles?granularity=M1&from=2026-08-05T07%3A20%3A00Z&to=2026-08-05T13%3A20%3A00Z&price=B "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/EUR_USD/candles?granularity=M1&from=2026-08-05T07%3A20%3A00Z&to=2026-08-05T13%3A20%3A00Z&price=A "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/USD_CHF/candles?granularity=M1&from=2026-08-05T07%3A20%3A00Z&to=2026-08-05T13%3A20%3A00Z&price=B "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/USD_CHF/candles?granularity=M1&from=2026-08-05T07%3A20%3A00Z&to=2026-08-05T13%3A20%3A00Z&price=A "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles?granularity=M1&from=2026-08-05T07%3A20%3A00Z&to=2026-08-05T13%3A20%3A00Z&price=B "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles?granularity=M1&from=2026-08-05T07%3A20%3A00Z&to=2026-08-05T13%3A20%3A00Z&price=A "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/USD_JPY/candles?granularity=M1&from=2026-08-05T07%3A20%3A00Z&to=2026-08-05T13%3A20%3A00Z&price=B "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/USD_JPY/candles?granularity=M1&from=2026-08-05T07%3A20%3A00Z&to=2026-08-05T13%3A20%3A00Z&price=A "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/GBP_JPY/candles?granularity=M1&from=2026-08-05T07%3A20%3A00Z&to=2026-08-05T13%3A20%3A00Z&price=B "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/GBP_JPY/candles?granularity=M1&from=2026-08-05T07%3A20%3A00Z&to=2026-08-05T13%3A20%3A00Z&price=A "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/AUD_USD/candles?granularity=M1&from=2026-08-05T07%3A20%3A00Z&to=2026-08-05T13%3A20%3A00Z&price=B "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/AUD_USD/candles?granularity=M1&from=2026-08-05T07%3A20%3A00Z&to=2026-08-05T13%3A20%3A00Z&price=A "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles?granularity=M1&from=2026-08-05T07%3A20%3A00Z&to=2026-08-05T13%3A20%3A00Z&price=B "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles?granularity=M1&from=2026-08-05T07%3A20%3A00Z&to=2026-08-05T13%3A20%3A00Z&price=A "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles?granularity=M1&from=2026-08-05T07%3A20%3A00Z&to=2026-08-05T13%3A20%3A00Z&price=B "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles?granularity=M1&from=2026-08-05T07%3A20%3A00Z&to=2026-08-05T13%3A20%3A00Z&price=A "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles?granularity=M1&from=2026-08-05T07%3A20%3A00Z&to=2026-08-05T13%3A20%3A00Z&price=B "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles?granularity=M1&from=2026-08-05T07%3A20%3A00Z&to=2026-08-05T13%3A20%3A00Z&price=A "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles?granularity=M1&from=2026-08-05T07%3A20%3A00Z&to=2026-08-05T13%3A20%3A00Z&price=B "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles?granularity=M1&from=2026-08-05T07%3A20%3A00Z&to=2026-08-05T13%3A20%3A00Z&price=A "HTTP/1.1 200 OK"
+INFO:     app.services.pipeline — trailing window refresh complete: {'granularity': 'M1', 'price_types': ['B', 'A'], 'window_start': '2026-08-05T07:20:00.086127+00:00', 'window_end': '2026-08-05T13:20:00.086127+00:00', 'lookback_hours': 6, 'fetched': 7196, 'instruments': 10, 'errors': 0}
+INFO:     apscheduler.executors.default — Job "_make_trailing_window_job.<locals>._job (trigger: cron[hour='*', minute='20'], next run at: 2026-08-05 14:20:00 UTC)" executed successfully
+INFO:     apscheduler.executors.default — Running job "_shadow_resolver (trigger: cron[hour='*/1', minute='35'], next run at: 2026-08-05 14:35:00 UTC)" (scheduled at 2026-08-05 13:35:00+00:00)
+INFO:     app.services.shadow.resolver — shadow resolver: {'checked': 5, 'resolved': 0, 'not_yet': 5, 'forced': 0, 'no_atr': 0, 'failed': 0, 'still_pending': 5, 'by_outcome': {'win': 0, 'loss': 0, 'breakeven': 0}, 'by_decision': {'take': 0, 'skip': 0, 'unscored': 0}}
+INFO:     app.services.scheduler — scheduled shadow resolver: {'checked': 5, 'resolved': 0, 'not_yet': 5, 'forced': 0, 'no_atr': 0, 'failed': 0, 'still_pending': 5, 'by_outcome': {'win': 0, 'loss': 0, 'breakeven': 0}, 'by_decision': {'take': 0, 'skip': 0, 'unscored': 0}}
+INFO:     apscheduler.executors.default — Job "_shadow_resolver (trigger: cron[hour='*/1', minute='35'], next run at: 2026-08-05 14:35:00 UTC)" executed successfully
+INFO:     apscheduler.executors.default — Running job "_make_trailing_window_job.<locals>._job (trigger: cron[hour='*', minute='20'], next run at: 2026-08-05 15:20:00 UTC)" (scheduled at 2026-08-05 14:20:00+00:00)
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/EUR_USD/candles?granularity=M1&from=2026-08-05T08%3A20%3A00Z&to=2026-08-05T14%3A20%3A00Z&price=B "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/EUR_USD/candles?granularity=M1&from=2026-08-05T08%3A20%3A00Z&to=2026-08-05T14%3A20%3A00Z&price=A "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/USD_CHF/candles?granularity=M1&from=2026-08-05T08%3A20%3A00Z&to=2026-08-05T14%3A20%3A00Z&price=B "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/USD_CHF/candles?granularity=M1&from=2026-08-05T08%3A20%3A00Z&to=2026-08-05T14%3A20%3A00Z&price=A "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles?granularity=M1&from=2026-08-05T08%3A20%3A00Z&to=2026-08-05T14%3A20%3A00Z&price=B "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles?granularity=M1&from=2026-08-05T08%3A20%3A00Z&to=2026-08-05T14%3A20%3A00Z&price=A "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/USD_JPY/candles?granularity=M1&from=2026-08-05T08%3A20%3A00Z&to=2026-08-05T14%3A20%3A00Z&price=B "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/USD_JPY/candles?granularity=M1&from=2026-08-05T08%3A20%3A00Z&to=2026-08-05T14%3A20%3A00Z&price=A "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/GBP_JPY/candles?granularity=M1&from=2026-08-05T08%3A20%3A00Z&to=2026-08-05T14%3A20%3A00Z&price=B "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/GBP_JPY/candles?granularity=M1&from=2026-08-05T08%3A20%3A00Z&to=2026-08-05T14%3A20%3A00Z&price=A "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/AUD_USD/candles?granularity=M1&from=2026-08-05T08%3A20%3A00Z&to=2026-08-05T14%3A20%3A00Z&price=B "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/AUD_USD/candles?granularity=M1&from=2026-08-05T08%3A20%3A00Z&to=2026-08-05T14%3A20%3A00Z&price=A "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles?granularity=M1&from=2026-08-05T08%3A20%3A00Z&to=2026-08-05T14%3A20%3A00Z&price=B "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles?granularity=M1&from=2026-08-05T08%3A20%3A00Z&to=2026-08-05T14%3A20%3A00Z&price=A "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles?granularity=M1&from=2026-08-05T08%3A20%3A00Z&to=2026-08-05T14%3A20%3A00Z&price=B "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles?granularity=M1&from=2026-08-05T08%3A20%3A00Z&to=2026-08-05T14%3A20%3A00Z&price=A "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles?granularity=M1&from=2026-08-05T08%3A20%3A00Z&to=2026-08-05T14%3A20%3A00Z&price=B "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles?granularity=M1&from=2026-08-05T08%3A20%3A00Z&to=2026-08-05T14%3A20%3A00Z&price=A "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles?granularity=M1&from=2026-08-05T08%3A20%3A00Z&to=2026-08-05T14%3A20%3A00Z&price=B "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles?granularity=M1&from=2026-08-05T08%3A20%3A00Z&to=2026-08-05T14%3A20%3A00Z&price=A "HTTP/1.1 200 OK"
+INFO:     app.services.pipeline — trailing window refresh complete: {'granularity': 'M1', 'price_types': ['B', 'A'], 'window_start': '2026-08-05T08:20:00.049469+00:00', 'window_end': '2026-08-05T14:20:00.049469+00:00', 'lookback_hours': 6, 'fetched': 1200, 'instruments': 10, 'errors': 0}
+INFO:     apscheduler.executors.default — Job "_make_trailing_window_job.<locals>._job (trigger: cron[hour='*', minute='20'], next run at: 2026-08-05 15:20:00 UTC)" executed successfully
+INFO:     apscheduler.executors.default — Running job "_shadow_resolver (trigger: cron[hour='*/1', minute='35'], next run at: 2026-08-05 15:35:00 UTC)" (scheduled at 2026-08-05 14:35:00+00:00)
+INFO:     app.services.shadow.resolver — shadow resolver: {'checked': 5, 'resolved': 0, 'not_yet': 5, 'forced': 0, 'no_atr': 0, 'failed': 0, 'still_pending': 5, 'by_outcome': {'win': 0, 'loss': 0, 'breakeven': 0}, 'by_decision': {'take': 0, 'skip': 0, 'unscored': 0}}
+INFO:     app.services.scheduler — scheduled shadow resolver: {'checked': 5, 'resolved': 0, 'not_yet': 5, 'forced': 0, 'no_atr': 0, 'failed': 0, 'still_pending': 5, 'by_outcome': {'win': 0, 'loss': 0, 'breakeven': 0}, 'by_decision': {'take': 0, 'skip': 0, 'unscored': 0}}
+INFO:     apscheduler.executors.default — Job "_shadow_resolver (trigger: cron[hour='*/1', minute='35'], next run at: 2026-08-05 15:35:00 UTC)" executed successfully
+INFO:     apscheduler.executors.default — Running job "_make_trailing_window_job.<locals>._job (trigger: cron[hour='*', minute='20'], next run at: 2026-08-05 16:20:00 UTC)" (scheduled at 2026-08-05 15:20:00+00:00)
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/EUR_USD/candles?granularity=M1&from=2026-08-05T09%3A20%3A00Z&to=2026-08-05T15%3A20%3A00Z&price=B "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/EUR_USD/candles?granularity=M1&from=2026-08-05T09%3A20%3A00Z&to=2026-08-05T15%3A20%3A00Z&price=A "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/USD_CHF/candles?granularity=M1&from=2026-08-05T09%3A20%3A00Z&to=2026-08-05T15%3A20%3A00Z&price=B "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/USD_CHF/candles?granularity=M1&from=2026-08-05T09%3A20%3A00Z&to=2026-08-05T15%3A20%3A00Z&price=A "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles?granularity=M1&from=2026-08-05T09%3A20%3A00Z&to=2026-08-05T15%3A20%3A00Z&price=B "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles?granularity=M1&from=2026-08-05T09%3A20%3A00Z&to=2026-08-05T15%3A20%3A00Z&price=A "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/USD_JPY/candles?granularity=M1&from=2026-08-05T09%3A20%3A00Z&to=2026-08-05T15%3A20%3A00Z&price=B "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/USD_JPY/candles?granularity=M1&from=2026-08-05T09%3A20%3A00Z&to=2026-08-05T15%3A20%3A00Z&price=A "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/GBP_JPY/candles?granularity=M1&from=2026-08-05T09%3A20%3A00Z&to=2026-08-05T15%3A20%3A00Z&price=B "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/GBP_JPY/candles?granularity=M1&from=2026-08-05T09%3A20%3A00Z&to=2026-08-05T15%3A20%3A00Z&price=A "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/AUD_USD/candles?granularity=M1&from=2026-08-05T09%3A20%3A00Z&to=2026-08-05T15%3A20%3A00Z&price=B "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/AUD_USD/candles?granularity=M1&from=2026-08-05T09%3A20%3A00Z&to=2026-08-05T15%3A20%3A00Z&price=A "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles?granularity=M1&from=2026-08-05T09%3A20%3A00Z&to=2026-08-05T15%3A20%3A00Z&price=B "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles?granularity=M1&from=2026-08-05T09%3A20%3A00Z&to=2026-08-05T15%3A20%3A00Z&price=A "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles?granularity=M1&from=2026-08-05T09%3A20%3A00Z&to=2026-08-05T15%3A20%3A00Z&price=B "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles?granularity=M1&from=2026-08-05T09%3A20%3A00Z&to=2026-08-05T15%3A20%3A00Z&price=A "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles?granularity=M1&from=2026-08-05T09%3A20%3A00Z&to=2026-08-05T15%3A20%3A00Z&price=B "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles?granularity=M1&from=2026-08-05T09%3A20%3A00Z&to=2026-08-05T15%3A20%3A00Z&price=A "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles?granularity=M1&from=2026-08-05T09%3A20%3A00Z&to=2026-08-05T15%3A20%3A00Z&price=B "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles?granularity=M1&from=2026-08-05T09%3A20%3A00Z&to=2026-08-05T15%3A20%3A00Z&price=A "HTTP/1.1 200 OK"
+INFO:     app.services.pipeline — trailing window refresh complete: {'granularity': 'M1', 'price_types': ['B', 'A'], 'window_start': '2026-08-05T09:20:00.037079+00:00', 'window_end': '2026-08-05T15:20:00.037079+00:00', 'lookback_hours': 6, 'fetched': 1200, 'instruments': 10, 'errors': 0}
+INFO:     apscheduler.executors.default — Job "_make_trailing_window_job.<locals>._job (trigger: cron[hour='*', minute='20'], next run at: 2026-08-05 16:20:00 UTC)" executed successfully
+INFO:     apscheduler.executors.default — Running job "_shadow_resolver (trigger: cron[hour='*/1', minute='35'], next run at: 2026-08-05 16:35:00 UTC)" (scheduled at 2026-08-05 15:35:00+00:00)
+INFO:     app.services.shadow.resolver — shadow resolver: {'checked': 5, 'resolved': 0, 'not_yet': 5, 'forced': 0, 'no_atr': 0, 'failed': 0, 'still_pending': 5, 'by_outcome': {'win': 0, 'loss': 0, 'breakeven': 0}, 'by_decision': {'take': 0, 'skip': 0, 'unscored': 0}}
+INFO:     app.services.scheduler — scheduled shadow resolver: {'checked': 5, 'resolved': 0, 'not_yet': 5, 'forced': 0, 'no_atr': 0, 'failed': 0, 'still_pending': 5, 'by_outcome': {'win': 0, 'loss': 0, 'breakeven': 0}, 'by_decision': {'take': 0, 'skip': 0, 'unscored': 0}}
+INFO:     apscheduler.executors.default — Job "_shadow_resolver (trigger: cron[hour='*/1', minute='35'], next run at: 2026-08-05 16:35:00 UTC)" executed successfully
+WARNING:     app.services.price_stream — price stream disconnected (attempt 1/10): 
+WARNING:     app.services.price_stream — price stream disconnected (attempt 2/10): [Errno 11001] getaddrinfo failed
+INFO:     httpx — HTTP Request: GET https://stream-fxpractice.oanda.com/v3/accounts/101-003-39159710-001/pricing/stream?instruments=EUR_USD%2CUSD_CHF%2CEUR_JPY%2CUSD_JPY%2CGBP_JPY%2CAUD_USD%2CGBP_USD%2CUSD_CAD%2CEUR_GBP%2CNZD_USD&snapshot=true "HTTP/1.1 520 <none>"
+WARNING:     app.services.price_stream — price stream disconnected (attempt 3/10): Server error '520 <none>' for url 'https://stream-fxpractice.oanda.com/v3/accounts/101-003-39159710-001/pricing/stream?instruments=EUR_USD%2CUSD_CHF%2CEUR_JPY%2CUSD_JPY%2CGBP_JPY%2CAUD_USD%2CGBP_USD%2CUSD_CAD%2CEUR_GBP%2CNZD_USD&snapshot=true'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/520
+INFO:     httpx — HTTP Request: GET https://stream-fxpractice.oanda.com/v3/accounts/101-003-39159710-001/pricing/stream?instruments=EUR_USD%2CUSD_CHF%2CEUR_JPY%2CUSD_JPY%2CGBP_JPY%2CAUD_USD%2CGBP_USD%2CUSD_CAD%2CEUR_GBP%2CNZD_USD&snapshot=true "HTTP/1.1 200 OK"
+WARNING:     apscheduler.executors.default — Run time of job "_intraday_fundamentals (trigger: cron[hour='*/4', minute='15'], next run at: 2026-08-05 20:15:00 UTC)" was missed by 1:45:46.557036
+WARNING:     apscheduler.executors.default — Run time of job "_make_trailing_window_job.<locals>._job (trigger: cron[hour='*', minute='20'], next run at: 2026-08-05 18:20:00 UTC)" was missed by 0:40:46.581483
+WARNING:     apscheduler.executors.default — Run time of job "_shadow_resolver (trigger: cron[hour='*/1', minute='35'], next run at: 2026-08-05 18:35:00 UTC)" was missed by 0:25:46.587200
+WARNING:     apscheduler.executors.default — Run time of job "_make_candle_close_job.<locals>._job (trigger: cron[hour='1,5,9,13,17,21', minute='1'], next run at: 2026-08-05 17:01:00 UTC)" was missed by 0:59:46.589359
+INFO:     apscheduler.executors.default — Running job "_make_trailing_window_job.<locals>._job (trigger: cron[hour='*', minute='20'], next run at: 2026-08-05 19:20:00 UTC)" (scheduled at 2026-08-05 18:20:00+00:00)
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/EUR_USD/candles?granularity=M1&from=2026-08-05T12%3A20%3A00Z&to=2026-08-05T18%3A20%3A00Z&price=B "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/EUR_USD/candles?granularity=M1&from=2026-08-05T12%3A20%3A00Z&to=2026-08-05T18%3A20%3A00Z&price=A "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/USD_CHF/candles?granularity=M1&from=2026-08-05T12%3A20%3A00Z&to=2026-08-05T18%3A20%3A00Z&price=B "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/USD_CHF/candles?granularity=M1&from=2026-08-05T12%3A20%3A00Z&to=2026-08-05T18%3A20%3A00Z&price=A "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles?granularity=M1&from=2026-08-05T12%3A20%3A00Z&to=2026-08-05T18%3A20%3A00Z&price=B "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/EUR_JPY/candles?granularity=M1&from=2026-08-05T12%3A20%3A00Z&to=2026-08-05T18%3A20%3A00Z&price=A "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/USD_JPY/candles?granularity=M1&from=2026-08-05T12%3A20%3A00Z&to=2026-08-05T18%3A20%3A00Z&price=B "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/USD_JPY/candles?granularity=M1&from=2026-08-05T12%3A20%3A00Z&to=2026-08-05T18%3A20%3A00Z&price=A "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/GBP_JPY/candles?granularity=M1&from=2026-08-05T12%3A20%3A00Z&to=2026-08-05T18%3A20%3A00Z&price=B "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/GBP_JPY/candles?granularity=M1&from=2026-08-05T12%3A20%3A00Z&to=2026-08-05T18%3A20%3A00Z&price=A "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/AUD_USD/candles?granularity=M1&from=2026-08-05T12%3A20%3A00Z&to=2026-08-05T18%3A20%3A00Z&price=B "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/AUD_USD/candles?granularity=M1&from=2026-08-05T12%3A20%3A00Z&to=2026-08-05T18%3A20%3A00Z&price=A "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles?granularity=M1&from=2026-08-05T12%3A20%3A00Z&to=2026-08-05T18%3A20%3A00Z&price=B "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/GBP_USD/candles?granularity=M1&from=2026-08-05T12%3A20%3A00Z&to=2026-08-05T18%3A20%3A00Z&price=A "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles?granularity=M1&from=2026-08-05T12%3A20%3A00Z&to=2026-08-05T18%3A20%3A00Z&price=B "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/USD_CAD/candles?granularity=M1&from=2026-08-05T12%3A20%3A00Z&to=2026-08-05T18%3A20%3A00Z&price=A "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles?granularity=M1&from=2026-08-05T12%3A20%3A00Z&to=2026-08-05T18%3A20%3A00Z&price=B "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/EUR_GBP/candles?granularity=M1&from=2026-08-05T12%3A20%3A00Z&to=2026-08-05T18%3A20%3A00Z&price=A "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles?granularity=M1&from=2026-08-05T12%3A20%3A00Z&to=2026-08-05T18%3A20%3A00Z&price=B "HTTP/1.1 200 OK"
+INFO:     httpx — HTTP Request: GET https://api-fxpractice.oanda.com/v3/instruments/NZD_USD/candles?granularity=M1&from=2026-08-05T12%3A20%3A00Z&to=2026-08-05T18%3A20%3A00Z&price=A "HTTP/1.1 200 OK"
+INFO:     app.services.pipeline — trailing window refresh complete: {'granularity': 'M1', 'price_types': ['B', 'A'], 'window_start': '2026-08-05T12:20:00.053551+00:00', 'window_end': '2026-08-05T18:20:00.053551+00:00', 'lookback_hours': 6, 'fetched': 3598, 'instruments': 10, 'errors': 0}
+INFO:     apscheduler.executors.default — Job "_make_trailing_window_job.<locals>._job (trigger: cron[hour='*', minute='20'], next run at: 2026-08-05 19:20:00 UTC)" executed successfully

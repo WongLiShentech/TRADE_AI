@@ -10,6 +10,7 @@ from app.api.v1 import (
     orders,
     portfolio,
     prices,
+    shadow,
     signals,
     trades,
     wiki,
@@ -29,3 +30,4 @@ router.include_router(backtester.router, prefix="/backtester", tags=["backtester
 router.include_router(journal.router, prefix="/journal", tags=["journal"])
 router.include_router(wiki.router, prefix="/wiki", tags=["wiki"])
 router.include_router(bot.router, prefix="/bot", tags=["bot"])
+router.include_router(shadow.router, prefix="/shadow", tags=["shadow"])

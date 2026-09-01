@@ -1,7 +1,7 @@
 """baseline schema
 
-Revision ID: f80f62598993
-Revises: 
+Revision ID: 20260602_baseline_schema
+Revises:
 Create Date: 2026-06-02 03:39:10.336784
 
 """
@@ -11,7 +11,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision: str = 'f80f62598993'
+revision: str = '20260602_baseline_schema'
 down_revision: Union[str, None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None

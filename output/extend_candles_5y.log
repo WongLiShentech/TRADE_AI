@@ -1,0 +1,36 @@
+[extend_candles_5y] leftward extension across 10 active pairs; mid_start=2021-01-01 exec_start=2021-06-01
+  > AUD_USD|H4|M: 2021-01-01 -> 2024-01-05 (sub=365d)
+  AUD_USD|H4|M: +4689 rows
+  > AUD_USD|H4|B: 2021-06-01 -> 2024-06-03 (sub=365d)
+  AUD_USD|H4|B: +4689 rows
+  > AUD_USD|H4|A: 2021-06-01 -> 2024-06-03 (sub=365d)
+  AUD_USD|H4|A: +4689 rows
+  > AUD_USD|D|M: 2021-01-01 -> 2024-01-04 (sub=365d)
+  AUD_USD|D|M: +781 rows
+  > AUD_USD|M1|B: 2021-06-01 -> 2024-06-03 (sub=30d)
+  AUD_USD|M1|B: +1088217 rows
+  > AUD_USD|M1|A: 2021-06-01 -> 2024-06-03 (sub=30d)
+  AUD_USD|M1|A: +1088217 rows
+  > EUR_GBP|H4|M: 2021-01-01 -> 2024-01-05 (sub=365d)
+  EUR_GBP|H4|M: +4689 rows
+  > EUR_GBP|H4|B: 2021-06-01 -> 2024-06-03 (sub=365d)
+  EUR_GBP|H4|B: +4689 rows
+  > EUR_GBP|H4|A: 2021-06-01 -> 2024-06-03 (sub=365d)
+  EUR_GBP|H4|A: +4689 rows
+  > EUR_GBP|D|M: 2021-01-01 -> 2024-01-04 (sub=365d)
+  EUR_GBP|D|M: +781 rows
+  > EUR_GBP|M1|B: 2021-06-01 -> 2024-06-03 (sub=30d)
+  EUR_GBP|M1|B: +1089250 rows
+  > EUR_GBP|M1|A: 2021-06-01 -> 2024-06-03 (sub=30d)
+  EUR_GBP|M1|A: +1089250 rows
+  > EUR_JPY|H4|M: 2021-01-01 -> 2024-01-05 (sub=365d)
+  EUR_JPY|H4|M: +4687 rows
+  > EUR_JPY|H4|B: 2021-06-01 -> 2024-06-03 (sub=365d)
+  EUR_JPY|H4|B: +4687 rows
+  > EUR_JPY|H4|A: 2021-06-01 -> 2024-06-03 (sub=365d)
+  EUR_JPY|H4|A: +4687 rows
+  > EUR_JPY|D|M: 2021-01-01 -> 2024-01-04 (sub=365d)
+  EUR_JPY|D|M: +781 rows
+  > EUR_JPY|M1|B: 2021-06-01 -> 2024-06-03 (sub=30d)
+  EUR_JPY|M1|B: +1103243 rows
+  > EUR_JPY|M1|A: 2021-06-01 -> 2024-06-03 (sub=30d)

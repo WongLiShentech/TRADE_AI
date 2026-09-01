@@ -1,0 +1,215 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# PRODUCTION compose — always-on, single-host, HOST-AGNOSTIC.
+#
+# The SAME artifacts (this file + backend/Dockerfile + the image it builds) deploy
+# to every supported target. Only the .env files differ. See DEPLOYMENT.md.
+#
+#   Target A — Raspberry Pi 400   arm64, 4 GB, home LAN behind NAT, microSD/USB-SSD
+#   Target B — Oracle Cloud A1    arm64, 12 GB, Ubuntu, PUBLIC IP, block storage
+#   Target C — x86_64 VPS         (Hetzner et al.) documented fallback
+#
+# Nothing here pins a CPU architecture. `docker build` on the target produces a
+# native image from python:3.12-slim (multi-arch: amd64 + arm64 + more). Do NOT add
+# `platform:` — that is what would turn a portable build into an emulated one.
+#
+#     docker compose -f docker-compose.prod.yml up -d --build
+#
+# Deliberate differences from the dev compose, each one load-bearing:
+#
+#   * NO frontend service. M8-Shadow is a headless observation deployment; the
+#     React app is not part of what must stay up 24/7.
+#   * NO source bind-mount. `./backend:/app` would SHADOW the image's /app —
+#     including backend/models/, which is gitignored and therefore absent from a
+#     fresh clone on the server. The result would be an app that boots, finds no
+#     ML artifact and (before the startup assertion) records zero shadow rows
+#     while reporting healthy. Code changes ship as image rebuilds, not mounts.
+#   * NO published port on `db`. Postgres is reachable only over the compose
+#     network, on EVERY target. A public-IP host would otherwise be exposing a
+#     database to the internet; a home host would be exposing it to every device
+#     on the LAN (and to anything that gets onto the LAN).
+#   * The backend's PUBLISHED BIND ADDRESS is configurable and defaults to
+#     loopback — see API_BIND_HOST below.
+#
+# Root .env supplies POSTGRES_DB_* plus the deployment knobs used for ${...}
+# substitution here. backend/.env supplies application config — see
+# backend/.env.production.example for the values that MUST differ from the
+# Windows dev machine.
+# ──────────────────────────────────────────────────────────────────────────────
+
+services:
+  db:
+    image: postgres:15
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_DB_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_DB_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB_NAME}
+      TZ: UTC
+      PGTZ: UTC
+    # No `ports:` — compose-network only, on every target. See header.
+    #
+    # Tuning is passed as flags rather than a mounted postgresql.conf so the whole
+    # configuration stays in one reviewable file and needs no extra artifact to copy
+    # to the host. Every value is env-overridable: the defaults are sized for the
+    # SMALLEST supported target (4 GB Pi) because a config that is too small merely
+    # runs slower, while one that is too big gets the postmaster OOM-killed.
+    #
+    #   shared_buffers / effective_cache_size / work_mem / maintenance_work_mem
+    #       Standard sizing, scaled to the container memory limit below, not to host
+    #       RAM. Postgres cannot see the cgroup limit and will happily plan as if it
+    #       owned the machine.
+    #   max_connections=30
+    #       The app's SQLAlchemy pool is 5 + 10 overflow, plus the scheduler threads
+    #       and the occasional psql. 30 is ample and each unused slot costs reserved
+    #       memory.
+    #   random_page_cost=1.1
+    #       Both targets are flash (microSD/USB-SSD/block). The 4.0 default models a
+    #       spinning disk and pushes the planner off perfectly good index scans —
+    #       which on a Pi is the difference between an indexed lookup and a seq scan
+    #       over the M1 candle table.
+    #   wal_compression=on + checkpoint_timeout=15min      ← FLASH ENDURANCE
+    #       After each checkpoint, the first write to a page emits a FULL PAGE IMAGE
+    #       to the WAL. Frequent checkpoints (5min default) on a write-heavy hourly
+    #       M1 ingest multiply physical writes several times over. Stretching the
+    #       interval and compressing the images cuts WAL volume substantially, which
+    #       is exactly what wears out a microSD card. Both are CRASH-SAFE: durability
+    #       is unchanged, only recovery time grows.
+    #
+    #   NOT set, on purpose: `fsync=off` and `full_page_writes=off`. They would cut
+    #   writes further and they corrupt the database on power loss — the single most
+    #   likely failure mode for a Pi on a desk. `synchronous_commit=off` is a real
+    #   option (risks losing the last ~200ms of commits, never corruption); it is
+    #   documented in DEPLOYMENT.md as an opt-in, not enabled here.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=${PG_SHARED_BUFFERS:-256MB}
+      - -c
+      - effective_cache_size=${PG_EFFECTIVE_CACHE_SIZE:-512MB}
+      - -c
+      - work_mem=${PG_WORK_MEM:-8MB}
+      - -c
+      - maintenance_work_mem=${PG_MAINTENANCE_WORK_MEM:-64MB}
+      - -c
+      - max_connections=${PG_MAX_CONNECTIONS:-30}
+      - -c
+      - random_page_cost=${PG_RANDOM_PAGE_COST:-1.1}
+      - -c
+      - wal_compression=${PG_WAL_COMPRESSION:-on}
+      - -c
+      - checkpoint_timeout=${PG_CHECKPOINT_TIMEOUT:-15min}
+      - -c
+      - max_wal_size=${PG_MAX_WAL_SIZE:-1GB}
+      - -c
+      - synchronous_commit=${PG_SYNCHRONOUS_COMMIT:-on}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # Postgres treats SIGTERM as a SMART shutdown: it waits for every client to
+    # disconnect. The backend holds a pooled connection open indefinitely, so the
+    # smart shutdown never completes, Docker's 10s grace expires, SIGKILL lands and
+    # the next start is a crash recovery — extra writes on every single restart, on
+    # the card we are trying not to wear out. SIGINT is the FAST shutdown: roll back
+    # open transactions, checkpoint, exit cleanly.
+    stop_signal: SIGINT
+    stop_grace_period: 60s
+    # 64MB is the Docker default for /dev/shm and is where Postgres puts parallel
+    # query workspace; too small shows up as "could not resize shared memory segment".
+    shm_size: ${PG_SHM_SIZE:-128mb}
+    # Non-swarm resource caps (`mem_limit`/`cpus`, not `deploy:` — the latter is only
+    # honoured under swarm for these fields). Purpose is BLAST RADIUS, not tuning: on
+    # a 4 GB Pi an unbounded Postgres and an unbounded Python process can between
+    # them push the host into the OOM killer, which picks its victim by heuristic and
+    # may well take sshd. Capped, the kernel kills the offending container and
+    # `restart: unless-stopped` brings it straight back.
+    #
+    # NOTE (Raspberry Pi OS): memory limits are SILENTLY IGNORED unless cgroup memory
+    # is enabled in /boot/firmware/cmdline.txt. DEPLOYMENT.md has the one-liner and
+    # the check.
+    mem_limit: ${DB_MEM_LIMIT:-768m}
+    mem_reservation: ${DB_MEM_RESERVATION:-256m}
+    cpus: ${DB_CPUS:-2.0}
+    healthcheck:
+      # pg_isready against the real user+db, not just the socket: this is what
+      # gates the backend's `service_healthy` dependency, so it must mean
+      # "queryable", not "process started".
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_DB_USER} -d ${POSTGRES_DB_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      # Generous because a Pi booting from microSD is genuinely slow to start
+      # Postgres, and a too-short start_period makes the backend's `service_healthy`
+      # gate fail the first deploy on the slowest target.
+      start_period: ${DB_HEALTH_START_PERIOD:-60s}
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        # Not just `depends_on: [db]` — the entrypoint runs `alembic upgrade head`
+        # as its first act, which fails instantly against a Postgres that is still
+        # initialising. `unless-stopped` would then restart-loop the backend until
+        # the DB happened to win the race.
+        condition: service_healthy
+    ports:
+      # ── THE ONE LINE THAT DIFFERS BY TARGET ──────────────────────────────────
+      # Default 127.0.0.1 = loopback only. Nothing is served to any network; reach
+      # it with an SSH tunnel:
+      #     ssh -L 8000:127.0.0.1:8000 <user>@<host>
+      #     then browse http://localhost:8000/docs
+      #
+      #   Target B (OCI, PUBLIC IP)  — KEEP THE DEFAULT. Publishing on 0.0.0.0 here
+      #       puts an unauthenticated API (no auth is implemented yet) on the public
+      #       internet. Docker inserts its own DOCKER-USER iptables rules AHEAD of a
+      #       ufw/firewalld ruleset, so "the firewall is on" does NOT protect a
+      #       published port. This is not a theoretical exposure.
+      #   Target A (Pi, home LAN behind NAT) — setting API_BIND_HOST=0.0.0.0 in the
+      #       root .env is a reasonable choice: it is what lets another device on the
+      #       LAN open http://<pi-hostname>.local:8000/api/v1/shadow/performance. It
+      #       is acceptable ONLY because there is no inbound path from the internet.
+      #       If the Pi ever gets a port-forward, revert to 127.0.0.1 first.
+      #   Target C (x86 VPS, public IP) — same as Target B.
+      #
+      # Deliberately NOT defaulted to 0.0.0.0: the safe value must be the one you get
+      # by doing nothing.
+      - "${API_BIND_HOST:-127.0.0.1}:${API_PORT:-8000}:8000"
+    env_file:
+      - ./backend/.env
+    environment:
+      # Explicit override: backend/.env carries the DEV DATABASE_URL
+      # (host localhost). Inside compose the database is the `db` service.
+      # `environment` wins over `env_file`, so this is the effective value.
+      - DATABASE_URL=postgresql://${POSTGRES_DB_USER}:${POSTGRES_DB_PASSWORD}@db:5432/${POSTGRES_DB_NAME}
+      - TZ=UTC
+    volumes:
+      # Vault mount ONLY (no source mount). Keeps VAULT_PATH=/app/vault valid if
+      # the weekly journal/wiki chain is ever enabled server-side; harmless while
+      # WIKI_INGEST_ENABLED=false.
+      - vault:/app/vault
+    # Measured steady-state RSS is ~410 MB (numpy/pandas/xgboost/shap are resident
+    # from the moment the artifact loads). The default headroom below covers a
+    # candle-close cycle's transient DataFrames on the 4 GB target. Raise it on a
+    # 12 GB host, or if you ever run scripts/train_s1.py ON the server (training
+    # materialises the whole trade corpus and will exceed 1 GB).
+    mem_limit: ${BACKEND_MEM_LIMIT:-1200m}
+    mem_reservation: ${BACKEND_MEM_RESERVATION:-384m}
+    cpus: ${BACKEND_CPUS:-2.0}
+    logging:
+      driver: json-file
+      options:
+        # Unbounded json-file logs are the classic way an always-on host fills its
+        # storage and takes the database down with it. On a microSD that is also
+        # pure, avoidable write wear.
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  pgdata:
+  vault:

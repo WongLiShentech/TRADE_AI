@@ -1,0 +1,105 @@
+[extend_candles_5y] leftward extension across 10 active pairs; mid_start=2021-01-01 exec_start=2021-06-01
+  = AUD_USD|H4|M: already done (4689 rows)
+  = AUD_USD|H4|B: already done (4689 rows)
+  = AUD_USD|H4|A: already done (4689 rows)
+  = AUD_USD|D|M: already done (781 rows)
+  = AUD_USD|M1|B: already done (1088217 rows)
+  = AUD_USD|M1|A: already done (1088217 rows)
+  = EUR_GBP|H4|M: already done (4689 rows)
+  = EUR_GBP|H4|B: already done (4689 rows)
+  = EUR_GBP|H4|A: already done (4689 rows)
+  = EUR_GBP|D|M: already done (781 rows)
+  = EUR_GBP|M1|B: already done (1089250 rows)
+  = EUR_GBP|M1|A: already done (1089250 rows)
+  = EUR_JPY|H4|M: already done (4687 rows)
+  = EUR_JPY|H4|B: already done (4687 rows)
+  = EUR_JPY|H4|A: already done (4687 rows)
+  = EUR_JPY|D|M: already done (781 rows)
+  = EUR_JPY|M1|B: already done (1103243 rows)
+  > EUR_JPY|M1|A: 2022-12-23 -> 2024-06-03 (sub=30d)
+  EUR_JPY|M1|A: +1103243 rows
+  > EUR_USD|H4|M: 2021-01-01 -> 2024-01-05 (sub=365d)
+  EUR_USD|H4|M: +4689 rows
+  > EUR_USD|H4|B: 2021-06-01 -> 2024-06-03 (sub=365d)
+  EUR_USD|H4|B: +4689 rows
+  > EUR_USD|H4|A: 2021-06-01 -> 2024-06-03 (sub=365d)
+  EUR_USD|H4|A: +4689 rows
+  > EUR_USD|D|M: 2021-01-01 -> 2024-01-04 (sub=365d)
+  EUR_USD|D|M: +781 rows
+  > EUR_USD|M1|B: 2021-06-01 -> 2024-06-03 (sub=30d)
+  EUR_USD|M1|B: +1106453 rows
+  > EUR_USD|M1|A: 2021-06-01 -> 2024-06-03 (sub=30d)
+  EUR_USD|M1|A: +1106453 rows
+  > GBP_JPY|H4|M: 2021-01-01 -> 2024-01-05 (sub=365d)
+  GBP_JPY|H4|M: +4689 rows
+  > GBP_JPY|H4|B: 2021-06-01 -> 2024-06-03 (sub=365d)
+  GBP_JPY|H4|B: +4689 rows
+  > GBP_JPY|H4|A: 2021-06-01 -> 2024-06-03 (sub=365d)
+  GBP_JPY|H4|A: +4689 rows
+  > GBP_JPY|D|M: 2021-01-01 -> 2024-01-04 (sub=365d)
+  GBP_JPY|D|M: +781 rows
+  > GBP_JPY|M1|B: 2021-06-01 -> 2024-06-03 (sub=30d)
+  GBP_JPY|M1|B: +1112283 rows
+  > GBP_JPY|M1|A: 2021-06-01 -> 2024-06-03 (sub=30d)
+  GBP_JPY|M1|A: +1112283 rows
+  > GBP_USD|H4|M: 2021-01-01 -> 2024-01-05 (sub=365d)
+  GBP_USD|H4|M: +4689 rows
+  > GBP_USD|H4|B: 2021-06-01 -> 2024-06-03 (sub=365d)
+  GBP_USD|H4|B: +4689 rows
+  > GBP_USD|H4|A: 2021-06-01 -> 2024-06-03 (sub=365d)
+  GBP_USD|H4|A: +4689 rows
+  > GBP_USD|D|M: 2021-01-01 -> 2024-01-04 (sub=365d)
+  GBP_USD|D|M: +781 rows
+  > GBP_USD|M1|B: 2021-06-01 -> 2024-06-03 (sub=30d)
+  GBP_USD|M1|B: +1098712 rows
+  > GBP_USD|M1|A: 2021-06-01 -> 2024-06-03 (sub=30d)
+  GBP_USD|M1|A: +1098712 rows
+  > NZD_USD|H4|M: 2021-01-01 -> 2024-01-05 (sub=365d)
+  NZD_USD|H4|M: +4693 rows
+  > NZD_USD|H4|B: 2021-06-01 -> 2024-06-03 (sub=365d)
+  NZD_USD|H4|B: +4693 rows
+  > NZD_USD|H4|A: 2021-06-01 -> 2024-06-03 (sub=365d)
+  NZD_USD|H4|A: +4693 rows
+  > NZD_USD|D|M: 2021-01-01 -> 2024-01-04 (sub=365d)
+  NZD_USD|D|M: +785 rows
+  > NZD_USD|M1|B: 2021-06-01 -> 2024-06-03 (sub=30d)
+  NZD_USD|M1|B: +1091711 rows
+  > NZD_USD|M1|A: 2021-06-01 -> 2024-06-03 (sub=30d)
+  NZD_USD|M1|A: +1091711 rows
+  > USD_CAD|H4|M: 2021-01-01 -> 2024-01-05 (sub=365d)
+  USD_CAD|H4|M: +4689 rows
+  > USD_CAD|H4|B: 2021-06-01 -> 2024-06-03 (sub=365d)
+  USD_CAD|H4|B: +4689 rows
+  > USD_CAD|H4|A: 2021-06-01 -> 2024-06-03 (sub=365d)
+  USD_CAD|H4|A: +4689 rows
+  > USD_CAD|D|M: 2021-01-01 -> 2024-01-04 (sub=365d)
+  USD_CAD|D|M: +781 rows
+  > USD_CAD|M1|B: 2021-06-01 -> 2024-06-03 (sub=30d)
+  USD_CAD|M1|B: +1099816 rows
+  > USD_CAD|M1|A: 2021-06-01 -> 2024-06-03 (sub=30d)
+  USD_CAD|M1|A: +1099816 rows
+  > USD_CHF|H4|M: 2021-01-01 -> 2024-01-05 (sub=365d)
+  USD_CHF|H4|M: +4689 rows
+  > USD_CHF|H4|B: 2021-06-01 -> 2024-06-03 (sub=365d)
+  USD_CHF|H4|B: +4689 rows
+  > USD_CHF|H4|A: 2021-06-01 -> 2024-06-03 (sub=365d)
+  USD_CHF|H4|A: +4689 rows
+  > USD_CHF|D|M: 2021-01-01 -> 2024-01-04 (sub=365d)
+  USD_CHF|D|M: +781 rows
+  > USD_CHF|M1|B: 2021-06-01 -> 2024-06-03 (sub=30d)
+  USD_CHF|M1|B: +1053309 rows
+  > USD_CHF|M1|A: 2021-06-01 -> 2024-06-03 (sub=30d)
+  USD_CHF|M1|A: +1053309 rows
+  > USD_JPY|H4|M: 2021-01-01 -> 2024-01-05 (sub=365d)
+  USD_JPY|H4|M: +4689 rows
+  > USD_JPY|H4|B: 2021-06-01 -> 2024-06-03 (sub=365d)
+  USD_JPY|H4|B: +4689 rows
+  > USD_JPY|H4|A: 2021-06-01 -> 2024-06-03 (sub=365d)
+  USD_JPY|H4|A: +4689 rows
+  > USD_JPY|D|M: 2021-01-01 -> 2024-01-04 (sub=365d)
+  USD_JPY|D|M: +781 rows
+  > USD_JPY|M1|B: 2021-06-01 -> 2024-06-03 (sub=30d)
+  USD_JPY|M1|B: +1107423 rows
+  > USD_JPY|M1|A: 2021-06-01 -> 2024-06-03 (sub=30d)
+  USD_JPY|M1|A: +1107423 rows
+[extend_candles_5y] done — 21480591 rows inserted (cumulative)

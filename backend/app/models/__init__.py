@@ -7,6 +7,8 @@ from app.models.trade import Trade
 from app.models.backtest_run import BacktestRun
 from app.models.equity_point import EquityPoint
 from app.models.bot_state import BotState
+from app.models.macro_data import MacroData
+from app.models.news_calendar_event import NewsCalendarEvent
 
 __all__ = [
     "Instrument",
@@ -18,4 +20,6 @@ __all__ = [
     "BacktestRun",
     "EquityPoint",
     "BotState",
+    "MacroData",
+    "NewsCalendarEvent",
 ]

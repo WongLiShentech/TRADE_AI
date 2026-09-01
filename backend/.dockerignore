@@ -1,0 +1,42 @@
+# Build-context exclusions for backend/.
+#
+# ─────────────────────────────────────────────────────────────────────────────
+# CRITICAL — DO NOT ADD `models/` TO THIS FILE.
+# backend/models/ is gitignored (serialized ML binaries are not source), but it
+# is REQUIRED AT RUNTIME: settings.ML_MODEL_PATH resolves into it, and with
+# SHADOW_MODE_ENABLED=true the app now refuses to start without a loadable
+# artifact. Excluding it produces an image that fails its own startup assertion.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Secrets — credentials are injected at RUN time (compose env_file), never baked
+# into a layer. Anything baked in is recoverable from the image forever.
+.env
+.env.*
+
+# Python bytecode / tooling caches
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Tests: integration tests that talk to a real DB have no business in a
+# production image (and conftest now refuses to run against the live DB anyway).
+tests/
+
+# Legacy SQLite-era artifacts (the platform is on PostgreSQL since Pre-M7 Step 1)
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# Local-only outputs / VCS
+output/
+.git/
+.gitignore
+.venv/
+venv/

@@ -1,5 +1,5 @@
 from sqlalchemy.orm import Session
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.config import Settings
 from app.models.candle import Candle
@@ -12,7 +12,20 @@ def compute_and_store(
     granularity: str,
     db: Session,
     settings: Settings,
+    full_recompute: bool = False,
 ) -> int:
+    """Compute ATR14/RSI14/swings from Mid candles and store them.
+
+    Incremental by default: only candles from (latest indicator − warmup) onward are
+    read and new rows appended. This is what the live pipeline uses.
+
+    When ``full_recompute=True`` the incremental short-circuit is bypassed entirely:
+    every indicator is recomputed from the EARLIEST available Mid candle for this
+    instrument+granularity, and the existing indicator rows for this
+    (instrument_id, granularity) are deleted first so the recompute cleanly
+    OVERWRITES them (no duplicates on the natural key, no stale ragged left/right
+    edge). Wilder smoothing is therefore genuinely warm from the earliest Mid bar.
+    """
     instrument = db.query(Instrument).filter_by(symbol=instrument_symbol).first()
     if instrument is None:
         raise ValueError(f"Instrument '{instrument_symbol}' not found — run /instruments/sync first")
@@ -20,16 +33,23 @@ def compute_and_store(
     period = settings.ATR_PERIOD
     swing_lookback = settings.SWING_LOOKBACK_PERIODS
 
-    latest_indicator = (
-        db.query(Indicator)
-        .filter_by(instrument_id=instrument.id, granularity=granularity)
-        .order_by(Indicator.timestamp.desc())
-        .first()
-    )
+    # In full-recompute mode we recompute from the earliest Mid candle, so the
+    # incremental boundary logic must be skipped (latest_indicator forced to None).
+    latest_indicator = None
+    if not full_recompute:
+        latest_indicator = (
+            db.query(Indicator)
+            .filter_by(instrument_id=instrument.id, granularity=granularity)
+            .order_by(Indicator.timestamp.desc())
+            .first()
+        )
 
+    # Indicators are Mid-derived ONLY (Bid/Ask are execution-only). Filtering to
+    # price_type="M" is REQUIRED now that candles hold M/B/A at the same timestamp,
+    # otherwise TR/RSI would be computed across interleaved price types (corruption).
     candle_query = (
         db.query(Candle)
-        .filter_by(instrument_id=instrument.id, granularity=granularity)
+        .filter_by(instrument_id=instrument.id, granularity=granularity, price_type="M")
         .order_by(Candle.timestamp.asc())
     )
 
@@ -38,7 +58,7 @@ def compute_and_store(
         warmup_count = period * 2
         warmup_candles = (
             db.query(Candle)
-            .filter_by(instrument_id=instrument.id, granularity=granularity)
+            .filter_by(instrument_id=instrument.id, granularity=granularity, price_type="M")
             .filter(Candle.timestamp <= latest_indicator.timestamp)
             .order_by(Candle.timestamp.desc())
             .limit(warmup_count)
@@ -129,9 +149,24 @@ def compute_and_store(
         })
 
     if not rows:
+        if full_recompute:
+            # Nothing to write but still clear any stale rows so the table reflects
+            # the (empty) recompute result rather than the old ragged history.
+            db.query(Indicator).filter_by(
+                instrument_id=instrument.id, granularity=granularity
+            ).delete(synchronize_session=False)
+            db.commit()
         return 0
 
-    stmt = sqlite_insert(Indicator).values(rows).on_conflict_do_nothing()
+    if full_recompute:
+        # Clean OVERWRITE: drop the existing (possibly ragged/stale) rows for this
+        # instrument+granularity, then bulk-insert the freshly recomputed full set.
+        db.query(Indicator).filter_by(
+            instrument_id=instrument.id, granularity=granularity
+        ).delete(synchronize_session=False)
+        stmt = pg_insert(Indicator).values(rows)
+    else:
+        stmt = pg_insert(Indicator).values(rows).on_conflict_do_nothing()
     result = db.execute(stmt)
     db.commit()
     return result.rowcount

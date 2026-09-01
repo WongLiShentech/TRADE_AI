@@ -1,4 +1,6 @@
+import asyncio
 import json
+import logging
 from typing import AsyncIterator
 from datetime import datetime, timezone, timedelta
 
@@ -13,8 +15,12 @@ from app.brokers.base import (
     OrderResult,
     AccountInfo,
     PositionData,
+    StreamHeartbeatTimeout,
 )
 from app.config import Settings
+from app.domain.timeframes import get_timeframe
+
+logger = logging.getLogger(__name__)
 
 _OANDA_TYPE_TO_ASSET_CLASS: dict[str, str] = {
     "CURRENCY": "forex",
@@ -25,10 +31,16 @@ _OANDA_TYPE_TO_ASSET_CLASS: dict[str, str] = {
 
 class OandaClient(BrokerClient):
     def __init__(self, settings: Settings) -> None:
+        # Arms the base class's ORDER_PLACEMENT_ENABLED guard — see brokers/base.py.
+        super().__init__(settings)
         self._api_key = settings.OANDA_API_KEY
         self._account_id = settings.OANDA_ACCOUNT_ID
         self._base_url = settings.OANDA_BASE_URL.rstrip("/")
         self._stream_url = settings.OANDA_STREAM_URL
+        # Per-line watchdog for stream_prices. OANDA emits a HEARTBEAT message on
+        # the pricing stream every ~5s when there is no price to send, so "no line
+        # at all for this long" is an unambiguous dead-connection signal.
+        self._heartbeat_timeout = float(settings.STREAM_HEARTBEAT_TIMEOUT_SECONDS)
 
     def get_instruments(self) -> list[InstrumentData]:
         url = f"{self._base_url}/v3/accounts/{self._account_id}/instruments"
@@ -58,9 +70,11 @@ class OandaClient(BrokerClient):
         granularity: str,
         start: datetime,
         end: datetime,
+        price_type: str = "M",
     ) -> list[CandleData]:
-        _CANDLES_PER_DAY = {"H4": 6, "D": 1}
-        candles_per_day = _CANDLES_PER_DAY.get(granularity, 6)
+        _PRICE_KEY = {"M": "mid", "B": "bid", "A": "ask"}
+        candles_per_day = get_timeframe(granularity).candles_per_day
+        price_key = _PRICE_KEY[price_type]
         max_per_request = 5000
         chunk_days = max_per_request // candles_per_day
 
@@ -78,7 +92,7 @@ class OandaClient(BrokerClient):
                     "granularity": granularity,
                     "from": chunk_start.strftime("%Y-%m-%dT%H:%M:%SZ"),
                     "to": chunk_end.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                    "price": "M",
+                    "price": price_type,
                 }
                 response = client.get(url, headers=headers, params=params)
                 response.raise_for_status()
@@ -86,7 +100,7 @@ class OandaClient(BrokerClient):
                 for candle in response.json().get("candles", []):
                     if not candle.get("complete", False):
                         continue
-                    mid = candle["mid"]
+                    ohlc = candle[price_key]
                     results.append(
                         CandleData(
                             instrument=instrument,
@@ -94,10 +108,10 @@ class OandaClient(BrokerClient):
                             timestamp=datetime.strptime(
                                 candle["time"], "%Y-%m-%dT%H:%M:%S.%f000Z"
                             ).replace(tzinfo=timezone.utc),
-                            open=float(mid["o"]),
-                            high=float(mid["h"]),
-                            low=float(mid["l"]),
-                            close=float(mid["c"]),
+                            open=float(ohlc["o"]),
+                            high=float(ohlc["h"]),
+                            low=float(ohlc["l"]),
+                            close=float(ohlc["c"]),
                             volume=int(candle["volume"]),
                         )
                     )
@@ -106,14 +120,65 @@ class OandaClient(BrokerClient):
         return results
 
     async def stream_prices(self, instruments: list[str]) -> AsyncIterator[TickData]:
+        """Yield ticks from OANDA's pricing stream, guarded by a heartbeat watchdog.
+
+        Raises:
+            StreamHeartbeatTimeout: no line of ANY kind (PRICE or HEARTBEAT) arrived
+                within ``STREAM_HEARTBEAT_TIMEOUT_SECONDS``. Surfacing this is the
+                whole point of the watchdog — see below.
+
+        Why the watchdog exists
+        -----------------------
+        The client is deliberately created with ``timeout=None``: a streaming
+        response is long-lived by definition, and any positive httpx read timeout
+        would kill a healthy stream during a quiet market. But ``timeout=None``
+        removes the ONLY mechanism that would ever have raised on a half-open TCP
+        connection. When the peer disappears without an RST (VM suspend/resume, NAT
+        eviction, broker-side silent drop), ``aiter_lines()`` blocks forever, no
+        exception is raised, the reconnect loop in ``services.price_stream`` never
+        fires, and the process keeps reporting healthy with a frozen price cache.
+
+        OANDA solves the detection half for us: the pricing stream sends a
+        ``{"type":"HEARTBEAT"}`` message every few seconds whenever there is no
+        price update. So *any* line arriving proves the socket is alive. The
+        watchdog therefore wraps the ITERATOR, not the tick-yielding branch —
+        heartbeats and unparseable lines reset it exactly like a price does. (The
+        original code ``continue``d past non-PRICE messages, so a watchdog placed
+        after that filter would have fired during any quiet market.)
+        """
         url = f"{self._stream_url}/v3/accounts/{self._account_id}/pricing/stream"
         headers = {"Authorization": f"Bearer {self._api_key}"}
         params = {"instruments": ",".join(instruments), "snapshot": "true"}
 
-        async with httpx.AsyncClient(timeout=None) as client:
+        # follow_redirects: OANDA's streaming endpoint answers with a 307 to a
+        # relative Location; httpx does NOT follow redirects by default, so
+        # raise_for_status() would treat the 307 as fatal and the stream would
+        # never connect (observed 2026-08-04).
+        async with httpx.AsyncClient(timeout=None, follow_redirects=True) as client:
             async with client.stream("GET", url, headers=headers, params=params) as response:
                 response.raise_for_status()
-                async for line in response.aiter_lines():
+                lines = response.aiter_lines()
+                while True:
+                    try:
+                        line = await asyncio.wait_for(
+                            lines.__anext__(), timeout=self._heartbeat_timeout
+                        )
+                    except StopAsyncIteration:
+                        # Server closed the stream cleanly. Not an error here — the
+                        # caller's reconnect loop decides what to do about it.
+                        logger.info("OANDA pricing stream closed by server")
+                        return
+                    except (asyncio.TimeoutError, TimeoutError) as exc:
+                        # wait_for has already cancelled the pending read; abandoning
+                        # the connection is correct — the `async with` blocks close
+                        # the response and the client on the way out.
+                        raise StreamHeartbeatTimeout(
+                            f"no data (price or heartbeat) from the OANDA pricing stream "
+                            f"for {self._heartbeat_timeout:.0f}s "
+                            f"(STREAM_HEARTBEAT_TIMEOUT_SECONDS) — treating the "
+                            f"connection as dead and forcing a reconnect"
+                        ) from exc
+
                     if not line:
                         continue
                     try:
@@ -156,7 +221,9 @@ class OandaClient(BrokerClient):
         position_value = float(conversions[quote_currency]["positionValue"])
         return pip_size * position_value
 
-    def place_order(self, order: OrderRequest) -> OrderResult:
+    def _place_order(self, order: OrderRequest) -> OrderResult:
+        """Not implemented — Phase 1 is observe-only. Reached only when
+        ORDER_PLACEMENT_ENABLED is true (base class enforces that)."""
         raise NotImplementedError
 
     def get_account(self) -> AccountInfo:

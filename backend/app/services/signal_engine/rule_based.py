@@ -26,10 +26,11 @@ Entry/stop/target:
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Optional
 
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Query, Session
 
 from app.config import Settings
 from app.models.candle import Candle
@@ -46,6 +47,34 @@ _H4_HOURS = 4
 _BLOCKING_STATUSES = ("PENDING", "APPROVED", "EXECUTED")
 
 
+@dataclass(frozen=True)
+class BacktestQuote:
+    """Historical quote injected by the M7 runner in place of the live tick cache.
+
+    In backtest mode the "current" quote is the decision bar's H4 Bid/Ask CLOSE
+    (``bid`` = Bid close, ``ask`` = Ask close), so a BUY fills at ``ask`` and a SELL
+    at ``bid`` — identical to how the live path consumes ``TickData.ask`` / ``.bid``.
+    The c5 spread is ``ask - bid`` (Ask close − Bid close at the decision bar).
+    """
+
+    bid: float
+    ask: float
+
+
+def _as_of_filter(query: Query, as_of: Optional[datetime]) -> Query:
+    """Additively bound a candle/indicator query to ``timestamp <= as_of`` when an
+    as-of instant is given; a no-op when ``as_of`` is None (live path — unchanged)."""
+    if as_of is not None:
+        return query.filter(Candle.timestamp <= as_of)
+    return query
+
+
+def _as_of_filter_ind(query: Query, as_of: Optional[datetime]) -> Query:
+    if as_of is not None:
+        return query.filter(Indicator.timestamp <= as_of)
+    return query
+
+
 class RuleBasedSignalEngine(SignalEngine):
     def evaluate(
         self,
@@ -53,27 +82,47 @@ class RuleBasedSignalEngine(SignalEngine):
         granularity: str,
         db: Session,
         settings: Settings,
+        *,
+        as_of: Optional[datetime] = None,
+        quote: Optional[BacktestQuote] = None,
     ) -> Optional[SignalOutput]:
+        """Evaluate one instrument at a candle close.
+
+        Live (default): ``as_of=None`` / ``quote=None`` — reads the latest stored
+        indicator/candle rows and the in-memory tick cache. Behaviour is bit-identical
+        to before this parameter existed.
+
+        Backtest: the runner passes ``as_of=T`` (strictly after the decision bar's
+        close) so every indicator/candle read is bounded ``timestamp <= T``, and
+        ``quote`` supplies the decision bar's H4 Bid/Ask close in place of the live
+        tick. No live-path branch is altered.
+        """
         inst = db.query(Instrument).filter_by(symbol=instrument).first()
         if inst is None:
             logger.debug("evaluate: instrument %s not in DB", instrument)
             return None
 
-        now_utc = datetime.utcnow()
+        backtest = as_of is not None
+        now_utc = as_of if as_of is not None else datetime.utcnow()
 
-        # ── Gate: cooldown ────────────────────────────────────────────────────
-        cooldown_hours = settings.SIGNAL_COOLDOWN_BARS_AFTER_CLOSE * _H4_HOURS
-        cooldown_cutoff = now_utc - timedelta(hours=cooldown_hours)
-        recent = (
-            db.query(Signal)
-            .filter(Signal.instrument_id == inst.id)
-            .filter(Signal.status.in_(_BLOCKING_STATUSES))
-            .filter(Signal.created_at >= cooldown_cutoff)
-            .first()
-        )
-        if recent is not None:
-            logger.debug("evaluate %s: cooldown — recent signal id=%s", instrument, recent.id)
-            return None
+        # ── Gate: cooldown (live only) ────────────────────────────────────────
+        # The live cooldown reads the Signal table by wall-clock created_at, which
+        # is meaningless against a historical as_of (live rows created "now" would
+        # spuriously match a past cutoff). In backtest the runner owns cooldown
+        # (SIGNAL_COOLDOWN_BARS_AFTER_CLOSE after each simulated exit, per instrument).
+        if not backtest:
+            cooldown_hours = settings.SIGNAL_COOLDOWN_BARS_AFTER_CLOSE * _H4_HOURS
+            cooldown_cutoff = now_utc - timedelta(hours=cooldown_hours)
+            recent = (
+                db.query(Signal)
+                .filter(Signal.instrument_id == inst.id)
+                .filter(Signal.status.in_(_BLOCKING_STATUSES))
+                .filter(Signal.created_at >= cooldown_cutoff)
+                .first()
+            )
+            if recent is not None:
+                logger.debug("evaluate %s: cooldown — recent signal id=%s", instrument, recent.id)
+                return None
 
         # ── Gate: pre-weekend ────────────────────────────────────────────────
         if _within_pre_friday_window(now_utc, settings.SIGNAL_NO_TRADE_HOURS_BEFORE_FRIDAY_CLOSE):
@@ -82,8 +131,12 @@ class RuleBasedSignalEngine(SignalEngine):
 
         # ── Load H4 candles + indicator ──────────────────────────────────────
         h4_candles = (
-            db.query(Candle)
-            .filter_by(instrument_id=inst.id, granularity=granularity)
+            _as_of_filter(
+                db.query(Candle).filter_by(
+                    instrument_id=inst.id, granularity=granularity, price_type="M"
+                ),
+                as_of,
+            )
             .order_by(Candle.timestamp.desc())
             .limit(100)
             .all()
@@ -95,8 +148,10 @@ class RuleBasedSignalEngine(SignalEngine):
         latest_h4 = h4_candles[-1]
 
         latest_ind = (
-            db.query(Indicator)
-            .filter_by(instrument_id=inst.id, granularity=granularity)
+            _as_of_filter_ind(
+                db.query(Indicator).filter_by(instrument_id=inst.id, granularity=granularity),
+                as_of,
+            )
             .order_by(Indicator.timestamp.desc())
             .first()
         )
@@ -107,10 +162,18 @@ class RuleBasedSignalEngine(SignalEngine):
         rsi14 = latest_ind.rsi14
 
         # ── Load D1 trend ────────────────────────────────────────────────────
+        # `as_of` forward-fills: the latest CLOSED D1 row <= T is used (D1 lags H4
+        # by ~2 days; never require a same-day D1 bar).
         sma_period = settings.SIGNAL_TREND_SMA_PERIOD
         d1_candles = (
-            db.query(Candle)
-            .filter_by(instrument_id=inst.id, granularity=settings.SIGNAL_TREND_TIMEFRAME)
+            _as_of_filter(
+                db.query(Candle).filter_by(
+                    instrument_id=inst.id,
+                    granularity=settings.SIGNAL_TREND_TIMEFRAME,
+                    price_type="M",
+                ),
+                as_of,
+            )
             .order_by(Candle.timestamp.desc())
             .limit(sma_period)
             .all()
@@ -127,25 +190,34 @@ class RuleBasedSignalEngine(SignalEngine):
         d1_sma = sum(c.close for c in d1_candles) / len(d1_candles)
         d1_last_close = d1_candles[0].close  # newest
 
-        # ── Live tick ────────────────────────────────────────────────────────
-        tick = get_latest_price(instrument)
-        if tick is None:
-            logger.debug("evaluate %s: no tick in cache", instrument)
-            return None
+        # ── Quote: live tick (live) or injected decision-bar Bid/Ask (backtest) ──
+        if backtest:
+            if quote is None:
+                logger.debug("evaluate %s: no backtest quote supplied", instrument)
+                return None
+            quote_bid, quote_ask = quote.bid, quote.ask
+        else:
+            tick = get_latest_price(instrument)
+            if tick is None:
+                logger.debug("evaluate %s: no tick in cache", instrument)
+                return None
+            quote_bid, quote_ask = tick.bid, tick.ask
 
         # ── Common conditions ────────────────────────────────────────────────
         session = classify_session(now_utc)
         allowed_sessions = {s.strip().lower() for s in settings.SIGNAL_SESSION_FILTER.split(",") if s.strip()}
         c4_session_ok = session in allowed_sessions
 
-        spread = tick.ask - tick.bid
+        spread = quote_ask - quote_bid
         spread_pips = spread / inst.pip_size if inst.pip_size else float("inf")
         c5_spread_ok = spread_pips < settings.SIGNAL_MAX_SPREAD_PIPS
 
         # Recent swing context (look back over last 20 indicator rows for this instrument)
         recent_indicators = (
-            db.query(Indicator)
-            .filter_by(instrument_id=inst.id, granularity=granularity)
+            _as_of_filter_ind(
+                db.query(Indicator).filter_by(instrument_id=inst.id, granularity=granularity),
+                as_of,
+            )
             .order_by(Indicator.timestamp.desc())
             .limit(20)
             .all()
@@ -203,14 +275,14 @@ class RuleBasedSignalEngine(SignalEngine):
         stop_distance = settings.SIGNAL_STOP_ATR_MULTIPLIER * atr14
         if buy_pass:
             direction = "BUY"
-            entry = tick.ask
+            entry = quote_ask
             stop = entry - stop_distance
             target = entry + settings.MIN_RR_RATIO * stop_distance
             breakdown = buy_breakdown
             score = buy_score
         else:
             direction = "SELL"
-            entry = tick.bid
+            entry = quote_bid
             stop = entry + stop_distance
             target = entry - settings.MIN_RR_RATIO * stop_distance
             breakdown = sell_breakdown

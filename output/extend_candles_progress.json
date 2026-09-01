@@ -1,0 +1,422 @@
+{
+  "AUD_USD|H4|M": {
+    "start": "2021-01-01T00:00:00",
+    "seam_end": "2024-01-05T10:00:00",
+    "next_start": "2024-01-05T10:00:00",
+    "done": true,
+    "inserted": 4689
+  },
+  "AUD_USD|H4|B": {
+    "start": "2021-06-01T00:00:00",
+    "seam_end": "2024-06-03T09:00:00",
+    "next_start": "2024-06-03T09:00:00",
+    "done": true,
+    "inserted": 4689
+  },
+  "AUD_USD|H4|A": {
+    "start": "2021-06-01T00:00:00",
+    "seam_end": "2024-06-03T09:00:00",
+    "next_start": "2024-06-03T09:00:00",
+    "done": true,
+    "inserted": 4689
+  },
+  "AUD_USD|D|M": {
+    "start": "2021-01-01T00:00:00",
+    "seam_end": "2024-01-04T22:00:00",
+    "next_start": "2024-01-04T22:00:00",
+    "done": true,
+    "inserted": 781
+  },
+  "AUD_USD|M1|B": {
+    "start": "2021-06-01T00:00:00",
+    "seam_end": "2024-06-03T11:08:00",
+    "next_start": "2024-06-03T11:08:00",
+    "done": true,
+    "inserted": 1088217
+  },
+  "AUD_USD|M1|A": {
+    "start": "2021-06-01T00:00:00",
+    "seam_end": "2024-06-03T11:08:00",
+    "next_start": "2024-06-03T11:08:00",
+    "done": true,
+    "inserted": 1088217
+  },
+  "EUR_GBP|H4|M": {
+    "start": "2021-01-01T00:00:00",
+    "seam_end": "2024-01-05T10:00:00",
+    "next_start": "2024-01-05T10:00:00",
+    "done": true,
+    "inserted": 4689
+  },
+  "EUR_GBP|H4|B": {
+    "start": "2021-06-01T00:00:00",
+    "seam_end": "2024-06-03T09:00:00",
+    "next_start": "2024-06-03T09:00:00",
+    "done": true,
+    "inserted": 4689
+  },
+  "EUR_GBP|H4|A": {
+    "start": "2021-06-01T00:00:00",
+    "seam_end": "2024-06-03T09:00:00",
+    "next_start": "2024-06-03T09:00:00",
+    "done": true,
+    "inserted": 4689
+  },
+  "EUR_GBP|D|M": {
+    "start": "2021-01-01T00:00:00",
+    "seam_end": "2024-01-04T22:00:00",
+    "next_start": "2024-01-04T22:00:00",
+    "done": true,
+    "inserted": 781
+  },
+  "EUR_GBP|M1|B": {
+    "start": "2021-06-01T00:00:00",
+    "seam_end": "2024-06-03T11:08:00",
+    "next_start": "2024-06-03T11:08:00",
+    "done": true,
+    "inserted": 1089250
+  },
+  "EUR_GBP|M1|A": {
+    "start": "2021-06-01T00:00:00",
+    "seam_end": "2024-06-03T11:08:00",
+    "next_start": "2024-06-03T11:08:00",
+    "done": true,
+    "inserted": 1089250
+  },
+  "EUR_JPY|H4|M": {
+    "start": "2021-01-01T00:00:00",
+    "seam_end": "2024-01-05T10:00:00",
+    "next_start": "2024-01-05T10:00:00",
+    "done": true,
+    "inserted": 4687
+  },
+  "EUR_JPY|H4|B": {
+    "start": "2021-06-01T00:00:00",
+    "seam_end": "2024-06-03T09:00:00",
+    "next_start": "2024-06-03T09:00:00",
+    "done": true,
+    "inserted": 4687
+  },
+  "EUR_JPY|H4|A": {
+    "start": "2021-06-01T00:00:00",
+    "seam_end": "2024-06-03T09:00:00",
+    "next_start": "2024-06-03T09:00:00",
+    "done": true,
+    "inserted": 4687
+  },
+  "EUR_JPY|D|M": {
+    "start": "2021-01-01T00:00:00",
+    "seam_end": "2024-01-04T22:00:00",
+    "next_start": "2024-01-04T22:00:00",
+    "done": true,
+    "inserted": 781
+  },
+  "EUR_JPY|M1|B": {
+    "start": "2021-06-01T00:00:00",
+    "seam_end": "2024-06-03T11:08:00",
+    "next_start": "2024-06-03T11:08:00",
+    "done": true,
+    "inserted": 1103243
+  },
+  "EUR_JPY|M1|A": {
+    "start": "2021-06-01T00:00:00",
+    "seam_end": "2024-06-03T11:08:00",
+    "next_start": "2024-06-03T11:08:00",
+    "done": true,
+    "inserted": 1103243
+  },
+  "EUR_USD|H4|M": {
+    "start": "2021-01-01T00:00:00",
+    "seam_end": "2024-01-05T10:00:00",
+    "next_start": "2024-01-05T10:00:00",
+    "done": true,
+    "inserted": 4689
+  },
+  "EUR_USD|H4|B": {
+    "start": "2021-06-01T00:00:00",
+    "seam_end": "2024-06-03T09:00:00",
+    "next_start": "2024-06-03T09:00:00",
+    "done": true,
+    "inserted": 4689
+  },
+  "EUR_USD|H4|A": {
+    "start": "2021-06-01T00:00:00",
+    "seam_end": "2024-06-03T09:00:00",
+    "next_start": "2024-06-03T09:00:00",
+    "done": true,
+    "inserted": 4689
+  },
+  "EUR_USD|D|M": {
+    "start": "2021-01-01T00:00:00",
+    "seam_end": "2024-01-04T22:00:00",
+    "next_start": "2024-01-04T22:00:00",
+    "done": true,
+    "inserted": 781
+  },
+  "EUR_USD|M1|B": {
+    "start": "2021-06-01T00:00:00",
+    "seam_end": "2024-06-03T11:08:00",
+    "next_start": "2024-06-03T11:08:00",
+    "done": true,
+    "inserted": 1106453
+  },
+  "EUR_USD|M1|A": {
+    "start": "2021-06-01T00:00:00",
+    "seam_end": "2024-06-03T11:08:00",
+    "next_start": "2024-06-03T11:08:00",
+    "done": true,
+    "inserted": 1106453
+  },
+  "GBP_JPY|H4|M": {
+    "start": "2021-01-01T00:00:00",
+    "seam_end": "2024-01-05T10:00:00",
+    "next_start": "2024-01-05T10:00:00",
+    "done": true,
+    "inserted": 4689
+  },
+  "GBP_JPY|H4|B": {
+    "start": "2021-06-01T00:00:00",
+    "seam_end": "2024-06-03T09:00:00",
+    "next_start": "2024-06-03T09:00:00",
+    "done": true,
+    "inserted": 4689
+  },
+  "GBP_JPY|H4|A": {
+    "start": "2021-06-01T00:00:00",
+    "seam_end": "2024-06-03T09:00:00",
+    "next_start": "2024-06-03T09:00:00",
+    "done": true,
+    "inserted": 4689
+  },
+  "GBP_JPY|D|M": {
+    "start": "2021-01-01T00:00:00",
+    "seam_end": "2024-01-04T22:00:00",
+    "next_start": "2024-01-04T22:00:00",
+    "done": true,
+    "inserted": 781
+  },
+  "GBP_JPY|M1|B": {
+    "start": "2021-06-01T00:00:00",
+    "seam_end": "2024-06-03T11:08:00",
+    "next_start": "2024-06-03T11:08:00",
+    "done": true,
+    "inserted": 1112283
+  },
+  "GBP_JPY|M1|A": {
+    "start": "2021-06-01T00:00:00",
+    "seam_end": "2024-06-03T11:08:00",
+    "next_start": "2024-06-03T11:08:00",
+    "done": true,
+    "inserted": 1112283
+  },
+  "GBP_USD|H4|M": {
+    "start": "2021-01-01T00:00:00",
+    "seam_end": "2024-01-05T10:00:00",
+    "next_start": "2024-01-05T10:00:00",
+    "done": true,
+    "inserted": 4689
+  },
+  "GBP_USD|H4|B": {
+    "start": "2021-06-01T00:00:00",
+    "seam_end": "2024-06-03T09:00:00",
+    "next_start": "2024-06-03T09:00:00",
+    "done": true,
+    "inserted": 4689
+  },
+  "GBP_USD|H4|A": {
+    "start": "2021-06-01T00:00:00",
+    "seam_end": "2024-06-03T09:00:00",
+    "next_start": "2024-06-03T09:00:00",
+    "done": true,
+    "inserted": 4689
+  },
+  "GBP_USD|D|M": {
+    "start": "2021-01-01T00:00:00",
+    "seam_end": "2024-01-04T22:00:00",
+    "next_start": "2024-01-04T22:00:00",
+    "done": true,
+    "inserted": 781
+  },
+  "GBP_USD|M1|B": {
+    "start": "2021-06-01T00:00:00",
+    "seam_end": "2024-06-03T11:08:00",
+    "next_start": "2024-06-03T11:08:00",
+    "done": true,
+    "inserted": 1098712
+  },
+  "GBP_USD|M1|A": {
+    "start": "2021-06-01T00:00:00",
+    "seam_end": "2024-06-03T11:08:00",
+    "next_start": "2024-06-03T11:08:00",
+    "done": true,
+    "inserted": 1098712
+  },
+  "NZD_USD|H4|M": {
+    "start": "2021-01-01T00:00:00",
+    "seam_end": "2024-01-05T10:00:00",
+    "next_start": "2024-01-05T10:00:00",
+    "done": true,
+    "inserted": 4693
+  },
+  "NZD_USD|H4|B": {
+    "start": "2021-06-01T00:00:00",
+    "seam_end": "2024-06-03T09:00:00",
+    "next_start": "2024-06-03T09:00:00",
+    "done": true,
+    "inserted": 4693
+  },
+  "NZD_USD|H4|A": {
+    "start": "2021-06-01T00:00:00",
+    "seam_end": "2024-06-03T09:00:00",
+    "next_start": "2024-06-03T09:00:00",
+    "done": true,
+    "inserted": 4693
+  },
+  "NZD_USD|D|M": {
+    "start": "2021-01-01T00:00:00",
+    "seam_end": "2024-01-04T22:00:00",
+    "next_start": "2024-01-04T22:00:00",
+    "done": true,
+    "inserted": 785
+  },
+  "NZD_USD|M1|B": {
+    "start": "2021-06-01T00:00:00",
+    "seam_end": "2024-06-03T11:08:00",
+    "next_start": "2024-06-03T11:08:00",
+    "done": true,
+    "inserted": 1091711
+  },
+  "NZD_USD|M1|A": {
+    "start": "2021-06-01T00:00:00",
+    "seam_end": "2024-06-03T11:08:00",
+    "next_start": "2024-06-03T11:08:00",
+    "done": true,
+    "inserted": 1091711
+  },
+  "USD_CAD|H4|M": {
+    "start": "2021-01-01T00:00:00",
+    "seam_end": "2024-01-05T10:00:00",
+    "next_start": "2024-01-05T10:00:00",
+    "done": true,
+    "inserted": 4689
+  },
+  "USD_CAD|H4|B": {
+    "start": "2021-06-01T00:00:00",
+    "seam_end": "2024-06-03T09:00:00",
+    "next_start": "2024-06-03T09:00:00",
+    "done": true,
+    "inserted": 4689
+  },
+  "USD_CAD|H4|A": {
+    "start": "2021-06-01T00:00:00",
+    "seam_end": "2024-06-03T09:00:00",
+    "next_start": "2024-06-03T09:00:00",
+    "done": true,
+    "inserted": 4689
+  },
+  "USD_CAD|D|M": {
+    "start": "2021-01-01T00:00:00",
+    "seam_end": "2024-01-04T22:00:00",
+    "next_start": "2024-01-04T22:00:00",
+    "done": true,
+    "inserted": 781
+  },
+  "USD_CAD|M1|B": {
+    "start": "2021-06-01T00:00:00",
+    "seam_end": "2024-06-03T11:08:00",
+    "next_start": "2024-06-03T11:08:00",
+    "done": true,
+    "inserted": 1099816
+  },
+  "USD_CAD|M1|A": {
+    "start": "2021-06-01T00:00:00",
+    "seam_end": "2024-06-03T11:08:00",
+    "next_start": "2024-06-03T11:08:00",
+    "done": true,
+    "inserted": 1099816
+  },
+  "USD_CHF|H4|M": {
+    "start": "2021-01-01T00:00:00",
+    "seam_end": "2024-01-05T10:00:00",
+    "next_start": "2024-01-05T10:00:00",
+    "done": true,
+    "inserted": 4689
+  },
+  "USD_CHF|H4|B": {
+    "start": "2021-06-01T00:00:00",
+    "seam_end": "2024-06-03T09:00:00",
+    "next_start": "2024-06-03T09:00:00",
+    "done": true,
+    "inserted": 4689
+  },
+  "USD_CHF|H4|A": {
+    "start": "2021-06-01T00:00:00",
+    "seam_end": "2024-06-03T09:00:00",
+    "next_start": "2024-06-03T09:00:00",
+    "done": true,
+    "inserted": 4689
+  },
+  "USD_CHF|D|M": {
+    "start": "2021-01-01T00:00:00",
+    "seam_end": "2024-01-04T22:00:00",
+    "next_start": "2024-01-04T22:00:00",
+    "done": true,
+    "inserted": 781
+  },
+  "USD_CHF|M1|B": {
+    "start": "2021-06-01T00:00:00",
+    "seam_end": "2024-06-03T11:08:00",
+    "next_start": "2024-06-03T11:08:00",
+    "done": true,
+    "inserted": 1053309
+  },
+  "USD_CHF|M1|A": {
+    "start": "2021-06-01T00:00:00",
+    "seam_end": "2024-06-03T11:08:00",
+    "next_start": "2024-06-03T11:08:00",
+    "done": true,
+    "inserted": 1053309
+  },
+  "USD_JPY|H4|M": {
+    "start": "2021-01-01T00:00:00",
+    "seam_end": "2024-01-05T10:00:00",
+    "next_start": "2024-01-05T10:00:00",
+    "done": true,
+    "inserted": 4689
+  },
+  "USD_JPY|H4|B": {
+    "start": "2021-06-01T00:00:00",
+    "seam_end": "2024-06-03T09:00:00",
+    "next_start": "2024-06-03T09:00:00",
+    "done": true,
+    "inserted": 4689
+  },
+  "USD_JPY|H4|A": {
+    "start": "2021-06-01T00:00:00",
+    "seam_end": "2024-06-03T09:00:00",
+    "next_start": "2024-06-03T09:00:00",
+    "done": true,
+    "inserted": 4689
+  },
+  "USD_JPY|D|M": {
+    "start": "2021-01-01T00:00:00",
+    "seam_end": "2024-01-04T22:00:00",
+    "next_start": "2024-01-04T22:00:00",
+    "done": true,
+    "inserted": 781
+  },
+  "USD_JPY|M1|B": {
+    "start": "2021-06-01T00:00:00",
+    "seam_end": "2024-06-03T11:08:00",
+    "next_start": "2024-06-03T11:08:00",
+    "done": true,
+    "inserted": 1107423
+  },
+  "USD_JPY|M1|A": {
+    "start": "2021-06-01T00:00:00",
+    "seam_end": "2024-06-03T11:08:00",
+    "next_start": "2024-06-03T11:08:00",
+    "done": true,
+    "inserted": 1107423
+  }
+}

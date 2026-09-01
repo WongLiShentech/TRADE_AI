@@ -26,7 +26,7 @@ Personal algorithmic trading platform. Swing trading focus (H4/D1). Starting fro
 | Config | pydantic-settings (all env-driven, zero defaults) |
 | Scheduler | APScheduler (BackgroundScheduler, in-process, FastAPI lifespan) |
 | Wiki AI | Anthropic Python SDK (server-side, weekly journal→wiki ingestion) |
-| Deploy | Docker + fly.io or Railway |
+| Deploy | Docker (`docker-compose.prod.yml` + `backend/entrypoint.sh`) — host-agnostic ARM64/x86_64. Target: Raspberry Pi 400 (own hardware) or any VPS/OCI. See `DEPLOYMENT.md`. Seed via `scripts/export_slim_seed.py` (7.2GB→12MB; M1 needs zero seed rows) |
 
 ---
 
@@ -175,6 +175,14 @@ app/brokers/
 
 **BrokerRouter is the only entry point.** Application code never imports or instantiates a BrokerClient directly.
 
+**Order placement is guarded by construction (M8-Shadow).** `BrokerClient.place_order` is a
+concrete template method on the ABC: it raises `OrderPlacementDisabledError` unless
+`ORDER_PLACEMENT_ENABLED` is true, then delegates to the abstract `_place_order` each broker
+implements. A new broker inherits the guard whether or not its author knows the flag exists;
+a subclass that skips `super().__init__(settings)` fails closed. `BrokerRouter.place_order`
+re-checks before routing. **Never set `ORDER_PLACEMENT_ENABLED=true` while `ML_MODEL_PATH`
+points at a `.NOT_PROMOTED` artifact** — inference refuses that combination at load time.
+
 ```python
 # Usage — after instrument discovery (M1):
 router.for_instrument("EUR_USD", db)      # looks up asset_class from DB → routes to correct client
@@ -299,8 +307,36 @@ class Settings(BaseSettings):
     FUNDAMENTAL_DATA_PROVIDER: Optional[str] = None
     FUNDAMENTAL_DATA_API_KEY: Optional[str] = None
 
+    # Feature builder (Pre-M7 Step 4 — leakage firewall thresholds)
+    FEATURE_STALENESS_MONTHLY_DAYS: int      # monthly series → NaN if newest release older than this (e.g. 75)
+    FEATURE_STALENESS_DAILY_DAYS: int        # daily series → NaN if newest release older than this (e.g. 10)
+    VIX_CHANGE_DAYS: int                      # calendar-day lookback for vix_change_5d (e.g. 5)
+    WTI_CHANGE_DAYS: int                      # calendar-day lookback for wti_change_20d (e.g. 20)
+    YIELD_DIFFERENTIAL_CHANGE_MONTHS: str    # comma months-back for yield-diff change features (e.g. "1,3")
+
     # ML training
     MIN_ML_TRAINING_CONFIDENCE: float        # trades below this go to UNCERTAIN
+
+    # ML training pipeline (S1 — XGBoost signal filter)
+    ML_LABEL_THRESHOLD_R: float              # win label if rr_actual >= this (1.0)
+    ML_SEED: int                             # reproducibility (42)
+    ML_VALIDATION_FRACTION: float            # chronological IS tail held out (0.2)
+    ML_MIN_KEEP_FRACTION: float              # anti-gaming floor on threshold search (0.2)
+    ML_MAX_DEPTH: int
+    ML_N_ESTIMATORS: int
+    ML_LEARNING_RATE: float
+    ML_EARLY_STOPPING_ROUNDS: int
+
+    # ML inference + shadow mode (M8-Shadow)
+    SHADOW_MODE_ENABLED: bool                # record model decisions on live signals
+    ORDER_PLACEMENT_ENABLED: bool            # HARD SAFETY FLAG — false = no order ever reaches a broker
+    ML_MODEL_PATH: str                       # artifact path, relative to backend/
+    ML_DECISION_THRESHOLD: float             # P(win) >= this → 'take'
+    ML_ALLOW_UNPROMOTED_MODEL: bool          # allow loading a .NOT_PROMOTED artifact (shadow only)
+    SHADOW_MAX_NAN_MODEL_FEATURES: int       # warn when a live row exceeds this many NaN model features (0)
+    SHADOW_MIN_BUCKET_M1_DENSITY: float      # fraction of a bucket's minutes needed to count as observable (0.2)
+    SHADOW_RESOLVER_INTERVAL_HOURS: int      # outcome-resolution cron cadence
+    M1_LIVE_LOOKBACK_HOURS: int              # trailing M1 window refetched hourly (6)
 
     # Circuit breaker + alerts
     MIN_WIN_RATE_ALERT: float                # e.g. 0.45
@@ -356,6 +392,7 @@ CORS_ORIGINS=
 ```
 app/services/
 ├── trade_classifier.py      ← classify_trade() → STRATEGY/NEWS/MANIPULATION/MANUAL/UNCERTAIN + confidence
+├── feature_builder.py       ← build_features() → single PIT feature chokepoint (M7 + live); leakage firewall
 ├── session_classifier.py    ← classify_session(utc_dt) → asian/london/ny/overlap
 ├── journal_generator.py     ← generate_weekly_journal() → writes raw/TRADE_AI/journal/YYYY-WNN.md
 ├── wiki_ingestor.py         ← ingest_journal() → calls Anthropic API, writes wiki pages
@@ -366,7 +403,12 @@ app/services/
 ├── scheduler.py             ← APScheduler: Sun 00:00 UTC chain + daily circuit breaker check
 ├── news_calendar/           ← ABC + ForexFactory (default) + Finnhub (stub)
 ├── news_sentiment/          ← ABC + Finnhub + ForexNewsAPI (both stubs — Phase 1B)
-├── fundamental/             ← ABC + Finnhub + FRED (both stubs — Phase 2)
+├── fundamental/             ← ABC + FRED (macro_data pipeline) + staleness watchdog
+├── backtester/              ← M7: simulator.py, metrics.py, runner.py (walk-forward + promotion gate)
+├── ml/                      ← S1: dataset, pipeline, model, policy, evaluate, shap_analysis, artifact, inference
+├── shadow/                  ← M8-Shadow: recorder.py (live decisions), resolver.py (outcome resolution)
+│                              (deploy: DEPLOYMENT.md; seed: scripts/export_slim_seed.py;
+│                               optional Pi retention: scripts/prune_m1_candles.py — NEVER on dev)
 └── alerts/                  ← ABC + log (default) + email + telegram (both stubs)
 ```
 

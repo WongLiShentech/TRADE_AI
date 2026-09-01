@@ -18,6 +18,8 @@ class AlpacaClient(BrokerClient):
     """Phase 2 scaffold â€” not implemented."""
 
     def __init__(self, settings: Settings) -> None:
+        # Arms the base class's ORDER_PLACEMENT_ENABLED guard — see brokers/base.py.
+        super().__init__(settings)
         self._api_key = settings.ALPACA_API_KEY
         self._secret_key = settings.ALPACA_SECRET_KEY
         self._base_url = settings.ALPACA_BASE_URL
@@ -40,7 +42,9 @@ class AlpacaClient(BrokerClient):
     def get_pip_value(self, instrument: str) -> float:
         raise NotImplementedError
 
-    def place_order(self, order: OrderRequest) -> OrderResult:
+    def _place_order(self, order: OrderRequest) -> OrderResult:
+        """Phase 2 scaffold. Reached only when ORDER_PLACEMENT_ENABLED is true
+        (the base class enforces that before delegating here)."""
         raise NotImplementedError
 
     def get_account(self) -> AccountInfo:
