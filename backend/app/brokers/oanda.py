@@ -41,6 +41,10 @@ class OandaClient(BrokerClient):
         # the pricing stream every ~5s when there is no price to send, so "no line
         # at all for this long" is an unambiguous dead-connection signal.
         self._heartbeat_timeout = float(settings.STREAM_HEARTBEAT_TIMEOUT_SECONDS)
+        # instrument -> price decimal places, discovered from the broker on
+        # first use (see _price_precision). Fixed per instrument, so caching
+        # costs nothing and saves a round-trip on every order.
+        self._precision_cache: dict[str, int] = {}
 
     def get_instruments(self) -> list[InstrumentData]:
         url = f"{self._base_url}/v3/accounts/{self._account_id}/instruments"
@@ -221,13 +225,167 @@ class OandaClient(BrokerClient):
         position_value = float(conversions[quote_currency]["positionValue"])
         return pip_size * position_value
 
+    def _price_precision(self, instrument: str) -> int:
+        """Decimal places OANDA accepts for this instrument's prices.
+
+        Derived from the broker's own ``pipLocation`` (EUR_USD -4 → 5 dp;
+        USD_JPY -2 → 3 dp), never from a hardcoded "JPY pairs are different" rule —
+        the platform discovers instrument properties at runtime, and a price with
+        the wrong precision is rejected outright (PRICE_PRECISION_EXCEEDED).
+
+        Cached per process: the value is a fixed property of the instrument, and an
+        extra round-trip on every order is latency for no information.
+        """
+        if instrument in self._precision_cache:
+            return self._precision_cache[instrument]
+        url = f"{self._base_url}/v3/accounts/{self._account_id}/instruments"
+        headers = {"Authorization": f"Bearer {self._api_key}"}
+        with httpx.Client(timeout=10) as client:
+            response = client.get(
+                url, headers=headers, params={"instruments": instrument},
+                follow_redirects=True,
+            )
+            response.raise_for_status()
+        rows = response.json().get("instruments", [])
+        if not rows:
+            raise ValueError(f"OANDA returned no instrument details for {instrument}")
+        precision = -int(rows[0]["pipLocation"]) + 1
+        self._precision_cache[instrument] = precision
+        return precision
+
     def _place_order(self, order: OrderRequest) -> OrderResult:
-        """Not implemented — Phase 1 is observe-only. Reached only when
-        ORDER_PLACEMENT_ENABLED is true (base class enforces that)."""
-        raise NotImplementedError
+        """Submit a MARKET order with stop-loss and take-profit attached.
+
+        Reached ONLY through :meth:`BrokerClient.place_order`, which has already
+        verified execution mode, the master switch, and that the configured venue is
+        a practice endpoint.
+
+        Why the exits are attached to the order (``stopLossOnFill`` /
+        ``takeProfitOnFill``) rather than managed by this platform
+        ----------------------------------------------------------
+        They then live on OANDA's servers. If this process crashes, the host is
+        rebooted, the network drops, or the container is redeployed mid-trade, the
+        stop is still there. A platform-managed stop is only as available as the
+        platform — and an unprotected open position is precisely the failure this
+        system exists to avoid. The one exit OANDA cannot enforce is the
+        ``SIGNAL_MAX_HOLD_BARS`` time exit, which needs a separate closer job.
+
+        ``FOK`` (fill-or-kill): a market order that cannot be filled in full is
+        rejected rather than partially filled. A partial fill would leave a position
+        whose size no longer matches the size RiskEngine sized, silently breaking the
+        locked risk triangle.
+        """
+        units = int(order.units) if order.direction.upper() == "BUY" else -int(order.units)
+        dp = self._price_precision(order.instrument)
+        payload = {
+            "order": {
+                "type": order.order_type.upper(),
+                "instrument": order.instrument,
+                "units": str(units),
+                "timeInForce": "FOK",
+                "positionFill": "DEFAULT",
+                "stopLossOnFill": {"price": f"{order.stop_loss:.{dp}f}"},
+                "takeProfitOnFill": {"price": f"{order.take_profit:.{dp}f}"},
+            }
+        }
+        url = f"{self._base_url}/v3/accounts/{self._account_id}/orders"
+        headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json",
+        }
+        with httpx.Client(timeout=20) as client:
+            response = client.post(url, headers=headers, json=payload, follow_redirects=True)
+        body = response.json() if response.content else {}
+
+        # A rejection is a NORMAL outcome (market closed, insufficient margin, stop
+        # too close), not an exception: the caller must record it as a rejected
+        # attempt rather than lose the decision entirely.
+        if response.status_code >= 400 or "orderRejectTransaction" in body:
+            reason = (
+                body.get("orderRejectTransaction", {}).get("rejectReason")
+                or body.get("errorMessage")
+                or f"HTTP {response.status_code}"
+            )
+            logger.warning(
+                "OANDA rejected order %s %s %s: %s",
+                order.direction, order.units, order.instrument, reason,
+            )
+            return OrderResult(
+                broker_order_id=str(
+                    body.get("orderRejectTransaction", {}).get("id", "")
+                ),
+                status=f"REJECTED:{reason}",
+                filled_price=None,
+                units=0,
+            )
+
+        fill = body.get("orderFillTransaction")
+        if not fill:
+            # Accepted but unfilled (e.g. queued while the market is closed). Report
+            # honestly rather than inventing a fill price.
+            create = body.get("orderCreateTransaction", {})
+            return OrderResult(
+                broker_order_id=str(create.get("id", "")),
+                status="PENDING",
+                filled_price=None,
+                units=0,
+            )
+
+        return OrderResult(
+            broker_order_id=str(fill.get("id", "")),
+            status="FILLED",
+            filled_price=float(fill["price"]),
+            units=abs(int(float(fill["units"]))),
+        )
 
     def get_account(self) -> AccountInfo:
-        raise NotImplementedError
+        """Live account summary. Read-only — cannot move money, so it is unguarded.
+
+        Position sizing MUST use this rather than ``STARTING_BALANCE``: the config
+        value is a fixed number, so every size would drift from reality the moment
+        the account made or lost anything.
+        """
+        url = f"{self._base_url}/v3/accounts/{self._account_id}/summary"
+        headers = {"Authorization": f"Bearer {self._api_key}"}
+        with httpx.Client(timeout=10) as client:
+            response = client.get(url, headers=headers, follow_redirects=True)
+            response.raise_for_status()
+        acc = response.json()["account"]
+        return AccountInfo(
+            account_id=str(acc["id"]),
+            balance=float(acc["balance"]),
+            unrealised_pnl=float(acc.get("unrealizedPL", 0.0)),
+            currency=str(acc["currency"]),
+        )
 
     def get_open_positions(self) -> list[PositionData]:
-        raise NotImplementedError
+        """Positions currently open at the broker. Read-only.
+
+        The broker is the authority on what is actually open — not this platform's
+        trade table. Reconciling the two is how a fill that never reached the
+        database, or a position closed by a stop the platform never saw, is caught.
+        """
+        url = f"{self._base_url}/v3/accounts/{self._account_id}/openPositions"
+        headers = {"Authorization": f"Bearer {self._api_key}"}
+        with httpx.Client(timeout=10) as client:
+            response = client.get(url, headers=headers, follow_redirects=True)
+            response.raise_for_status()
+        results: list[PositionData] = []
+        for pos in response.json().get("positions", []):
+            for side in ("long", "short"):
+                leg = pos.get(side, {})
+                units = int(float(leg.get("units", 0) or 0))
+                if units == 0:
+                    continue
+                results.append(
+                    PositionData(
+                        instrument=pos["instrument"],
+                        # OANDA signs units by side; the platform carries direction
+                        # separately, so units stays a magnitude here.
+                        direction="BUY" if side == "long" else "SELL",
+                        units=abs(units),
+                        avg_price=float(leg["averagePrice"]),
+                        unrealised_pnl=float(leg.get("unrealizedPL", 0.0)),
+                    )
+                )
+        return results

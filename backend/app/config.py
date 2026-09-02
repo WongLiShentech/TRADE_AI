@@ -177,6 +177,18 @@ class Settings(BaseSettings):
     # the same as a full one and letting the simulator walk past the true SL/TP touch.
     SHADOW_MIN_BUCKET_M1_DENSITY: float
 
+    # Execution venue (M8-Sandbox). THREE states, not a boolean, because "no
+    # orders", "practice orders" and "real money" are genuinely different and a
+    # boolean can only express two.
+    #   observe  — record decisions, never contact a broker  (current)
+    #   sandbox  — real order tickets against the PRACTICE account
+    #   live     — real money; NOT IMPLEMENTED and blocked in brokers/base.py
+    # Orders additionally require ORDER_PLACEMENT_ENABLED=true, and `sandbox` is
+    # cross-checked against OANDA_BASE_URL containing 'fxpractice' — a mode saying
+    # "practice" while the URL points at live is the one misconfiguration that
+    # silently risks real money.
+    EXECUTION_MODE: str
+
     # Excursion / path recording (Phase A — attribution layer)
     # Record where each trade TRAVELLED (MFE/MAE + per-bar R), not merely where it
     # ended. Off by default in the sense that a caller must ask for it; when a

@@ -89,6 +89,21 @@ class PositionData:
     unrealised_pnl: float
 
 
+# ── execution modes (the venue a strategy is permitted to trade) ─────────────
+# A three-state mode rather than a boolean, because "no orders", "practice orders"
+# and "real money" are three genuinely different states and a boolean can only
+# express two. Collapsing them is how a sandbox flag becomes a live order.
+EXECUTION_MODE_OBSERVE = "observe"   # record decisions only — no order, any broker
+EXECUTION_MODE_SANDBOX = "sandbox"   # real order tickets, PRACTICE account only
+EXECUTION_MODE_LIVE = "live"         # real money — NOT IMPLEMENTED, blocked in base
+_EXECUTION_MODES = frozenset({EXECUTION_MODE_OBSERVE, EXECUTION_MODE_SANDBOX, EXECUTION_MODE_LIVE})
+
+# Practice and live are distinguished ONLY by the OANDA host (project rule: no
+# account-type setting exists). This marker is what makes "sandbox" verifiable
+# rather than merely asserted.
+_PRACTICE_URL_MARKER = "fxpractice"
+
+
 class OrderPlacementDisabledError(RuntimeError):
     """Raised when an order is attempted while ``ORDER_PLACEMENT_ENABLED`` is false.
 
@@ -157,22 +172,72 @@ class BrokerClient(ABC):
         return self._place_order(order)
 
     def _assert_order_placement_enabled(self, order: OrderRequest) -> None:
-        """Fail-closed gate on the platform-wide order-placement flag."""
+        """Fail-closed gate: TWO independent flags must agree, plus a venue check.
+
+        Why two flags and not one
+        -------------------------
+        ``EXECUTION_MODE`` says WHICH venue may be traded; ``ORDER_PLACEMENT_ENABLED``
+        is an independent master switch. Both must be set deliberately, so no single
+        edit — or a stray environment variable in a shell, a CI job, a copied .env —
+        can start sending orders. They are cheap to check and expensive to get wrong.
+
+        Why the URL is re-checked here
+        ------------------------------
+        ``EXECUTION_MODE=sandbox`` means *practice money*. But the practice/live
+        distinction lives entirely in ``OANDA_BASE_URL`` (project rule: no account-type
+        setting exists). So "sandbox" plus a live URL is REAL MONEY with a label that
+        says otherwise — the single most dangerous misconfiguration this platform can
+        hold, and it is one careless copy-paste away. The mode and the venue are
+        therefore verified against each other at the last possible moment, inside the
+        one boundary every order must cross.
+        """
         if self._settings is None:
             raise OrderPlacementDisabledError(
                 f"{type(self).__name__} was constructed without Settings, so the "
-                "platform-wide ORDER_PLACEMENT_ENABLED flag cannot be verified. "
-                "Refusing to place an order. Pass settings to super().__init__()."
+                "execution-mode guard cannot be verified. Refusing to place an "
+                "order. Pass settings to super().__init__()."
             )
+
+        mode = str(getattr(self._settings, "EXECUTION_MODE", "")).strip().lower()
+        rejected = f"Rejected: {order.direction} {order.units} {order.instrument}."
+
+        # Unknown values fail CLOSED. A typo'd mode must never be permissive.
+        if mode not in _EXECUTION_MODES:
+            raise OrderPlacementDisabledError(
+                f"EXECUTION_MODE={mode!r} is not one of {sorted(_EXECUTION_MODES)} — "
+                f"refusing to place an order. {rejected}"
+            )
+
+        if mode == EXECUTION_MODE_OBSERVE:
+            raise OrderPlacementDisabledError(
+                "EXECUTION_MODE=observe — the platform records decisions and may not "
+                f"send an order to any broker. {rejected}"
+            )
+
         if self._settings.ORDER_PLACEMENT_ENABLED is not True:
             raise OrderPlacementDisabledError(
-                "ORDER_PLACEMENT_ENABLED is "
-                f"{self._settings.ORDER_PLACEMENT_ENABLED!r} — the platform is in "
-                "observe-only mode and may not send an order to any broker. "
-                f"Rejected: {order.direction} {order.units} {order.instrument}. "
-                "Flipping this flag to true is the deliberate, reviewed sandbox "
-                "transition; it must never be flipped while an unpromoted model is "
-                "loaded."
+                f"EXECUTION_MODE={mode!r} but ORDER_PLACEMENT_ENABLED is "
+                f"{self._settings.ORDER_PLACEMENT_ENABLED!r}. Both must be set "
+                f"deliberately before any order is sent. {rejected}"
+            )
+
+        if mode == EXECUTION_MODE_LIVE:
+            # Not a capability gap to be quietly filled in later: promoting to live
+            # is an explicit, reviewed decision that must also satisfy the promotion
+            # gate. Until that exists, this path stays shut.
+            raise OrderPlacementDisabledError(
+                "EXECUTION_MODE=live is not implemented and is deliberately blocked. "
+                f"Real-money execution has not been built or reviewed. {rejected}"
+            )
+
+        # mode == sandbox: the venue must actually be a practice venue.
+        base_url = str(getattr(self._settings, "OANDA_BASE_URL", "") or "")
+        if _PRACTICE_URL_MARKER not in base_url:
+            raise OrderPlacementDisabledError(
+                f"EXECUTION_MODE=sandbox but OANDA_BASE_URL={base_url!r} is not a "
+                f"practice endpoint (expected {_PRACTICE_URL_MARKER!r} in the host). "
+                "Sandbox mode means practice money; this configuration would send a "
+                f"real order to a live account. {rejected}"
             )
 
     @abstractmethod
