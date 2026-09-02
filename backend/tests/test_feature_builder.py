@@ -269,3 +269,35 @@ def test_smoke_full_dict(db, settings, instrument):
     assert 0.0 < feats["atr_pct"] < 0.05  # FX ATR% is small
     assert abs(feats["yield_differential_10y"]) < 15.0
     assert feats["vix"] > 0.0
+
+
+# ── Phase A leakage firewall: excursion data must never become a feature ─────
+def test_excursion_fields_are_never_model_features():
+    """MFE/MAE and path columns are LABELS, not features — enforced, not trusted.
+
+    Every value in ``trade_paths`` and in ``trades.mfe_r``/``mae_r`` is derived
+    from prices AFTER the signal timestamp. Feeding any of them to the model as an
+    input is the textbook leakage failure: it scores near-perfectly in backtest
+    and is worthless live, because at signal time the column does not exist yet.
+
+    They ARE legitimate as prediction targets (train a model to predict how far a
+    trade will run) and as strictly point-in-time aggregates over trades that had
+    already CLOSED before the signal being scored. Neither of those routes goes
+    through FEATURE_KEYS_MODEL, so this assertion costs nothing it should not.
+
+    Guards the whole namespace rather than a fixed list, so a future column named
+    e.g. ``mfe_at_bar_5`` is caught the day it is added.
+    """
+    from app.models.trade_path import TradePath
+
+    banned_exact = {"mfe_r", "mae_r", "path_truncated", "beyond_exit", "degraded"}
+    banned_exact |= {c.name for c in TradePath.__table__.columns}
+    banned_prefixes = ("mfe", "mae", "path_", "excursion")
+
+    for key in FEATURE_KEYS_MODEL:
+        assert key not in banned_exact, (
+            f"{key!r} is post-signal excursion data and must never be a model feature"
+        )
+        assert not key.startswith(banned_prefixes), (
+            f"{key!r} looks like excursion data (post-signal) and must not be a model feature"
+        )

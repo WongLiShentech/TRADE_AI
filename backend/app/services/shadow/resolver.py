@@ -87,6 +87,7 @@ from app.config import Settings
 from app.domain.timeframes import get_timeframe
 from app.models.candle import Candle
 from app.models.trade import Trade
+from app.models.trade_path import TradePath
 from app.services.backtester.runner import label_outcome
 from app.services.backtester.simulator import horizon_bounds, simulate
 from app.services.shadow.recorder import REASONING_SHADOW_KEY, STAGE_SHADOW
@@ -361,11 +362,18 @@ def _resolve_one(
         db, settings, trade.instrument_id, trade.direction,
         float(trade.entry_price), float(trade.stop_price), float(trade.tp_price),
         signal_time, atr14, granularity,
+        record_path=bool(settings.PATH_RECORDING_ENABLED),
     )
 
     trade.exit_price = float(result.exit_price)
     trade.rr_actual = float(result.rr_actual)
     trade.exit_reason = result.exit_reason
+    # Excursion (Phase A). Recorded on the same walk that produced the outcome, so
+    # the two can never describe different price streams. Written BEFORE the commit
+    # below, in the same transaction: a row whose outcome is set but whose path is
+    # missing would be indistinguishable from one that legitimately had no path,
+    # and nothing would ever come back to fill it in.
+    _persist_path(db, trade, result)
     # forced ⇒ ambiguous, unconditionally. The simulator flags its own degraded
     # branches, but a thin stream can also produce a CLEAN-looking barrier: the walk
     # simply never saw the minutes that would have contradicted it. The coverage that
@@ -389,6 +397,44 @@ def _resolve_one(
         " (FORCED past closure cap)" if forced else "",
     )
     return "resolved"
+
+
+def _persist_path(db: Session, trade: Trade, result) -> None:
+    """Write the excursion scalars onto the trade and its per-bar path rows.
+
+    Idempotent: re-resolving a trade replaces its path rather than appending a
+    second copy. Deleting first (rather than upserting) is deliberate — a
+    re-resolution may legitimately produce FEWER bars than before, and rows left
+    behind from the longer previous walk would silently extend the new path with
+    stale data.
+
+    A trade with no recorded path (recording disabled, or a walk that yielded
+    nothing) leaves ``mfe_r``/``mae_r`` NULL. NULL means "not measured"; 0.0 would
+    claim "never moved", which is a different and possibly false statement.
+    """
+    if not result.path:
+        return
+
+    db.query(TradePath).filter(TradePath.trade_id == trade.id).delete(synchronize_session=False)
+    db.bulk_save_objects(
+        [
+            TradePath(
+                trade_id=trade.id,
+                bar=p.bar,
+                r_close=p.r_close,
+                r_best=p.r_best,
+                r_worst=p.r_worst,
+                mfe_r=p.mfe_r,
+                mae_r=p.mae_r,
+                beyond_exit=p.beyond_exit,
+                degraded=p.degraded,
+            )
+            for p in result.path
+        ]
+    )
+    trade.mfe_r = None if result.mfe_r is None else float(result.mfe_r)
+    trade.mae_r = None if result.mae_r is None else float(result.mae_r)
+    trade.path_truncated = bool(result.path_truncated)
 
 
 def _granularity_of(trade: Trade, settings: Settings) -> str:

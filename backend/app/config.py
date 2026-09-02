@@ -177,6 +177,18 @@ class Settings(BaseSettings):
     # the same as a full one and letting the simulator walk past the true SL/TP touch.
     SHADOW_MIN_BUCKET_M1_DENSITY: float
 
+    # Excursion / path recording (Phase A — attribution layer)
+    # Record where each trade TRAVELLED (MFE/MAE + per-bar R), not merely where it
+    # ended. Off by default in the sense that a caller must ask for it; when a
+    # caller does, these two govern it.
+    PATH_RECORDING_ENABLED: bool
+    # How many signal-TF bars to keep walking AFTER the trade closed, to answer
+    # "should we have held longer?" — a question the closed trade's own record can
+    # never answer. Those bars are tagged beyond_exit and are excluded from mfe_r/
+    # mae_r, which describe the trade that actually happened. 0 disables the
+    # lookahead entirely (path stops at the exit bar).
+    PATH_EXTENDED_BARS: int
+
     # Circuit breaker + alerts (Part 4)
     MIN_WIN_RATE_ALERT: float
     MAX_DRAWDOWN_ALERT: float

@@ -169,6 +169,52 @@ class ExitResult:
     ambiguous_resolution: bool
     holding_hours: float
 
+    # ── Excursion record (Phase A) ────────────────────────────────────────────
+    # Defaulted so every existing construction site stays valid and every caller
+    # that ignores them keeps working unchanged. Populated only when the walk was
+    # given a recorder; ``()`` / ``None`` mean "not recorded", never "flat".
+    path: tuple["PathPoint", ...] = ()
+    mfe_r: Optional[float] = None
+    mae_r: Optional[float] = None
+    path_truncated: bool = False
+
+
+@dataclass(frozen=True)
+class PathPoint:
+    """One signal-timeframe bar of a trade's excursion, in R-multiples.
+
+    R convention — deliberately the EXIT side of the book
+    ----------------------------------------------------
+    These describe what closing the position at that instant would actually have
+    realised, so they use the price you would be FILLED at:
+
+        LONG   exit by selling at the bid  →  r = (bid  − entry) / risk
+        SHORT  exit by buying  at the ask  →  r = (entry − ask ) / risk
+
+    This is one spread more conservative than the barrier-touch checks in
+    ``_bar_signals``, which test a target against the ENTRY side. That asymmetry
+    is a known, separately-tracked issue in the barrier logic (it makes target
+    hits marginally easier than reality by roughly one spread); the excursion
+    record is written correctly from the start rather than inheriting it.
+
+    Consequence: ``r_close`` at the exit bar can differ from ``rr_actual`` by
+    about a spread, and ``rr_actual`` is additionally blended 50/50 when a partial
+    banked first. The invariants that DO hold exactly, and that the tests assert:
+
+        mae_r  ≤  rr_actual  ≤  mfe_r        for every resolved trade
+
+    A trade cannot finish better than its best moment nor worse than its worst.
+    """
+
+    bar: int          # signal-timeframe bars elapsed since the signal (0 = signal's own bar)
+    r_close: float    # R at this bar's close
+    r_best: float     # best R reached within this bar
+    r_worst: float    # worst R reached within this bar
+    mfe_r: float      # running max through this bar (inclusive)
+    mae_r: float      # running min through this bar (inclusive)
+    beyond_exit: bool # this bar is AFTER the trade actually closed
+    degraded: bool    # thin intrabar coverage — extremes may understate the range
+
 
 @dataclass
 class _State:
@@ -186,6 +232,103 @@ class _State:
     current_sl: float
     partial_filled: bool = False
     partial_r: float = 0.0  # R banked when the partial fires (= r_of(partial_level))
+
+
+class _PathRecorder:
+    """Accumulates a trade's excursion while the walk it rides along with proceeds.
+
+    The simulator already visits every intrabar bar to find the barriers; it just
+    discards the extremes it passes. This class is the notepad, and it is
+    deliberately passive: it never influences an exit decision, so attaching one
+    cannot change a single ``rr_actual``.
+
+    Bars are the SIGNAL timeframe (H4), aggregated from the intrabar (M1) stream
+    the walk consumes. ``bars_elapsed`` is supplied by the caller so the bucketing
+    matches the hold-budget arithmetic exactly rather than being re-derived here
+    (re-deriving it is how the two would silently drift apart).
+
+    Beyond the exit
+    ---------------
+    ``observe`` keeps accepting bars after the trade has closed, tagging them
+    ``beyond_exit``. That is the only way to answer "should we have held longer?",
+    which the closed trade's own record cannot. Those bars never feed ``mfe_r`` or
+    ``mae_r``: those two describe the trade that HAPPENED, and contaminating them
+    with prices from after the exit would make every "was this nearly a winner?"
+    query quietly wrong.
+    """
+
+    __slots__ = ("_side", "_entry", "_risk", "_min_bars", "_bars", "_mfe", "_mae", "_truncated")
+
+    def __init__(self, side: int, entry: float, risk: float, min_bars_per_bucket: int = 0) -> None:
+        self._side = side
+        self._entry = entry
+        self._risk = risk
+        # Below this many intrabar bars, a bucket's extremes are not trustworthy —
+        # a 3-of-240-minute bucket can look calm purely because nothing was seen.
+        # 0 disables the check (injected test sources are not real streams).
+        self._min_bars = min_bars_per_bucket
+        # bar -> [r_best, r_worst, r_close, n_intrabars, beyond_exit]
+        self._bars: dict[int, list] = {}
+        self._mfe: Optional[float] = None
+        self._mae: Optional[float] = None
+        self._truncated = False
+
+    def _r_range(self, bar: "BidAskBar") -> tuple[float, float, float]:
+        """(best, worst, close) R for this intrabar bar, on the EXIT side of the book."""
+        if self._side > 0:                       # LONG — closes by selling at the bid
+            best = (bar.bid_high - self._entry) / self._risk
+            worst = (bar.bid_low - self._entry) / self._risk
+            close = (bar.bid_close - self._entry) / self._risk
+        else:                                    # SHORT — closes by buying at the ask
+            best = (self._entry - bar.ask_low) / self._risk
+            worst = (self._entry - bar.ask_high) / self._risk
+            close = (self._entry - bar.ask_close) / self._risk
+        return best, worst, close
+
+    def observe(self, bar: "BidAskBar", bars_elapsed: int, *, beyond_exit: bool) -> None:
+        best, worst, close = self._r_range(bar)
+        slot = self._bars.get(bars_elapsed)
+        if slot is None:
+            self._bars[bars_elapsed] = [best, worst, close, 1, beyond_exit]
+        else:
+            slot[0] = max(slot[0], best)
+            slot[1] = min(slot[1], worst)
+            slot[2] = close          # last close wins — bars arrive in time order
+            slot[3] += 1
+            # A bucket straddling the exit is part of the real trade, not beyond it.
+            slot[4] = slot[4] and beyond_exit
+        if not beyond_exit:
+            self._mfe = best if self._mfe is None else max(self._mfe, best)
+            self._mae = worst if self._mae is None else min(self._mae, worst)
+
+    def mark_truncated(self) -> None:
+        """The intrabar stream ended before the intended horizon."""
+        self._truncated = True
+
+    def finalize(self) -> tuple[tuple[PathPoint, ...], Optional[float], Optional[float], bool]:
+        points: list[PathPoint] = []
+        run_mfe: Optional[float] = None
+        run_mae: Optional[float] = None
+        for bar in sorted(self._bars):
+            best, worst, close, n, beyond = self._bars[bar]
+            # Running extremes shown on the path include beyond-exit bars so the
+            # series reads naturally left to right; the SCALARS returned below do
+            # not, because they describe the trade that actually happened.
+            run_mfe = best if run_mfe is None else max(run_mfe, best)
+            run_mae = worst if run_mae is None else min(run_mae, worst)
+            points.append(
+                PathPoint(
+                    bar=bar,
+                    r_close=close,
+                    r_best=best,
+                    r_worst=worst,
+                    mfe_r=run_mfe,
+                    mae_r=run_mae,
+                    beyond_exit=bool(beyond),
+                    degraded=bool(self._min_bars and n < self._min_bars),
+                )
+            )
+        return tuple(points), self._mfe, self._mae, self._truncated
 
 
 # ── public API ───────────────────────────────────────────────────────────────
@@ -237,6 +380,7 @@ def simulate(
     *,
     m1_source: Optional[Iterable[BidAskBar]] = None,
     h4_source: Optional[Iterable[BidAskBar]] = None,
+    record_path: bool = False,
 ) -> ExitResult:
     """Simulate one fired signal to exit and return its :class:`ExitResult`.
 
@@ -301,11 +445,29 @@ def simulate(
             current_sl=float(stop),
         )
 
+    # Excursion recording (Phase A). Each branch gets its OWN recorder: a primary
+    # walk that yielded nothing must not leave half a path behind for the fallback
+    # to append to. ``None`` when disabled, which restores the exact prior code
+    # path — the recorder is passive, but "passive" is worth proving by absence.
+    extended_bars = int(settings.PATH_EXTENDED_BARS) if record_path else 0
+    min_bars = (
+        int(period_hours * 60 * float(settings.SHADOW_MIN_BUCKET_M1_DENSITY))
+        if record_path
+        else 0
+    )
+
+    def _make_recorder() -> Optional[_PathRecorder]:
+        if not record_path:
+            return None
+        return _PathRecorder(side, float(entry_price), risk, min_bars_per_bucket=min_bars)
+
     # Primary: M1 Bid/Ask. Returns None only if the stream yielded zero usable bars.
     primary = m1_source if m1_source is not None else _db_bidask_source(
         db, instrument_id, _INTRABAR_GRANULARITY, t, end
     )
-    result = _run_core(primary, _make_state(degraded=False), period_hours)
+    result = _run_core(
+        primary, _make_state(degraded=False), period_hours, _make_recorder(), extended_bars
+    )
     if result is not None:
         return result
 
@@ -313,7 +475,9 @@ def simulate(
     fallback = h4_source if h4_source is not None else _db_fallback_source(
         db, instrument_id, granularity, t, end
     )
-    result = _run_core(fallback, _make_state(degraded=True), period_hours)
+    result = _run_core(
+        fallback, _make_state(degraded=True), period_hours, _make_recorder(), extended_bars
+    )
     if result is not None:
         return result
 
@@ -329,10 +493,24 @@ def simulate(
 
 
 # ── core loop ────────────────────────────────────────────────────────────────
+def _with_path(result: ExitResult, recorder: Optional["_PathRecorder"]) -> ExitResult:
+    """Attach a finished recorder's excursion to an :class:`ExitResult`.
+
+    A no-op when no recorder was attached, which keeps every existing caller and
+    every injected-source test on precisely the code path they had before.
+    """
+    if recorder is None:
+        return result
+    path, mfe, mae, truncated = recorder.finalize()
+    return replace(result, path=path, mfe_r=mfe, mae_r=mae, path_truncated=truncated)
+
+
 def _run_core(
     source: Iterable[BidAskBar],
     st: _State,
     period_hours: float,
+    recorder: Optional["_PathRecorder"] = None,
+    extended_bars: int = 0,
 ) -> Optional[ExitResult]:
     """Consume bars in ascending time order; return an :class:`ExitResult`, or
     ``None`` if the stream yielded no bar strictly after the signal (caller then
@@ -349,6 +527,8 @@ def _run_core(
     last_bar: Optional[BidAskBar] = None
     current_bucket = _h4_bucket(st.signal_time, period_hours)
     bars_elapsed = 0
+    exit_result: Optional[ExitResult] = None
+    exit_bar = 0
     for raw in source:
         bar = raw if raw.ts.tzinfo is None else replace(raw, ts=_naive(raw.ts))
         if bar.ts <= st.signal_time:
@@ -357,10 +537,40 @@ def _run_core(
         if bucket != current_bucket:
             bars_elapsed += 1
             current_bucket = bucket
-        result = _process_bar(bar, st, bars_elapsed)
-        if result is not None:
-            return result
+
+        if exit_result is None:
+            result = _process_bar(bar, st, bars_elapsed)
+            if result is not None:
+                # Fast path: with no recorder attached the walk is exactly what it
+                # always was — resolve and return, consuming no further bars.
+                if recorder is None:
+                    return result
+                exit_result = result
+                exit_bar = bars_elapsed
+                # Record the exit bar itself as part of the trade, THEN stop
+                # feeding state. _process_bar is never called again: the trade is
+                # closed and later bars must not be able to move a stop or fire a
+                # second exit.
+                recorder.observe(bar, bars_elapsed, beyond_exit=False)
+                if extended_bars <= 0:
+                    return _with_path(exit_result, recorder)
+                continue
+
+        if recorder is not None:
+            recorder.observe(bar, bars_elapsed, beyond_exit=exit_result is not None)
+
+        if exit_result is not None and bars_elapsed - exit_bar >= extended_bars:
+            return _with_path(exit_result, recorder)
+
         last_bar = bar
+
+    # Stream exhausted. If the trade had already resolved, the beyond-exit window
+    # is simply shorter than requested — the exit itself is unaffected, but the
+    # path is flagged so a truncated tail is never mistaken for a quiet market.
+    if exit_result is not None:
+        if recorder is not None:
+            recorder.mark_truncated()
+        return _with_path(exit_result, recorder)
 
     if last_bar is None:
         return None
@@ -370,13 +580,18 @@ def _run_core(
     # flagged degraded.
     close_exit = last_bar.bid_close if st.side > 0 else last_bar.ask_close
     rr = _blended_rr(st, _r_of(close_exit, st))
-    return ExitResult(
-        exit_price=close_exit,
-        exit_time=last_bar.ts,
-        exit_reason="time_exit",
-        rr_actual=rr,
-        ambiguous_resolution=True,
-        holding_hours=_hours(last_bar.ts, st.signal_time),
+    if recorder is not None:
+        recorder.mark_truncated()
+    return _with_path(
+        ExitResult(
+            exit_price=close_exit,
+            exit_time=last_bar.ts,
+            exit_reason="time_exit",
+            rr_actual=rr,
+            ambiguous_resolution=True,
+            holding_hours=_hours(last_bar.ts, st.signal_time),
+        ),
+        recorder,
     )
 
 
