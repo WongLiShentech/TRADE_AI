@@ -1,19 +1,19 @@
 # Slim seed — load runbook
 
-Generated 2026-08-05T13:38:16.571108+00:00 by `backend/scripts/export_slim_seed.py`.
+Generated 2026-09-01T17:53:26.673710+00:00 by `backend/scripts/export_slim_seed.py`.
 
-Total artifact size: **12.3 MB** across 6 CSVs. `trades` IS included (`--no-trades` to omit).
+Total artifact size: **12.4 MB** across 6 CSVs. `trades` IS included (`--no-trades` to omit).
 
 ## Contents
 
 | table | rows (approx) | csv size | what it is |
 |---|---:|---:|---|
 | `instruments` | 127 | 5.7 KB | ALL rows — the universe, is_active flags and pip_size everything else FKs to. |
-| `macro_data` | 8,759 | 445.9 KB | ALL rows — bitemporal FRED vintages read point-in-time by feature_builder. |
-| `news_calendar_events` | 210 | 27.1 KB | ALL rows — the forward calendar spine, including future-dated events. |
-| `candles` | 12,000 | 840.7 KB | price_type='M' only, newest 1000 H4, 200 D bars per instrument. NO M1 ROWS — the hourly trailing-window job rebuilds the live M1 series from empty (this is the ~99.8% size win). |
-| `indicators` | 10,600 | 766.6 KB | newest 1000 H4, 60 D rows per instrument — recomputable, shipped so the first live candle-close job can fire immediately. |
-| `trades` | 7,079 | 10.3 MB | ALL rows — M7 backtest corpus (S1 training set) + any recorded shadow rows. ~12 MB. Omit with --no-trades for an observation-only deploy. |
+| `macro_data` | 8,847 | 450.3 KB | ALL rows — bitemporal FRED vintages read point-in-time by feature_builder. |
+| `news_calendar_events` | 212 | 27.4 KB | ALL rows — the forward calendar spine, including future-dated events. |
+| `candles` | 12,000 | 843.9 KB | price_type='M' only, newest 1000 H4, 200 D bars per instrument. NO M1 ROWS — the hourly trailing-window job rebuilds the live M1 series from empty (this is the ~99.8% size win). |
+| `indicators` | 10,600 | 766.7 KB | newest 1000 H4, 60 D rows per instrument — recomputable, shipped so the first live candle-close job can fire immediately. |
+| `trades` | 7,119 | 10.4 MB | ALL rows — M7 backtest corpus (S1 training set) + any recorded shadow rows. ~12 MB. Omit with --no-trades for an observation-only deploy. |
 
 **No `candles` M1 rows.** That omission is the point of this artifact: M1 Bid/Ask is
 ~99.8% of the source database and the hourly trailing-window job rebuilds the live

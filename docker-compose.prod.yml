@@ -23,10 +23,11 @@
 #     fresh clone on the server. The result would be an app that boots, finds no
 #     ML artifact and (before the startup assertion) records zero shadow rows
 #     while reporting healthy. Code changes ship as image rebuilds, not mounts.
-#   * NO published port on `db`. Postgres is reachable only over the compose
-#     network, on EVERY target. A public-IP host would otherwise be exposing a
-#     database to the internet; a home host would be exposing it to every device
-#     on the LAN (and to anything that gets onto the LAN).
+#   * `db` publishes on LOOPBACK ONLY (127.0.0.1), never on a routable address.
+#     Postgres is unreachable from any network on every target; GUI clients get in
+#     by tunnelling over SSH, reusing the key-authenticated door that already
+#     exists. Binding it to 0.0.0.0 would expose a database to the internet on a
+#     public-IP host, and to every device on the LAN at home — see DB_BIND_HOST.
 #   * The backend's PUBLISHED BIND ADDRESS is configurable and defaults to
 #     loopback — see API_BIND_HOST below.
 #
@@ -46,7 +47,20 @@ services:
       POSTGRES_DB: ${POSTGRES_DB_NAME}
       TZ: UTC
       PGTZ: UTC
-    # No `ports:` — compose-network only, on every target. See header.
+    ports:
+      # ── LOOPBACK ONLY — for SSH-tunnelled GUI clients (DBeaver, psql) ────────
+      # 127.0.0.1 means "this machine only": not the internet, not the LAN, not
+      # other containers' business. A GUI client reaches it by tunnelling over
+      # SSH, which already requires the host's private key — no new door is
+      # opened, an existing one is reused:
+      #     ssh -L 5432:127.0.0.1:5432 <user>@<host>
+      # or DBeaver's built-in SSH tunnel tab.
+      #
+      # ⚠️  NEVER set DB_BIND_HOST=0.0.0.0. That publishes Postgres to every
+      # network the host is on — and on a public-IP target, to the internet.
+      # Docker's DOCKER-USER iptables rules sit AHEAD of ufw/firewalld, so "the
+      # firewall is on" would NOT save you. The safe value is the default.
+      - "${DB_BIND_HOST:-127.0.0.1}:${DB_PORT:-5432}:5432"
     #
     # Tuning is passed as flags rather than a mounted postgresql.conf so the whole
     # configuration stays in one reviewable file and needs no extra artifact to copy

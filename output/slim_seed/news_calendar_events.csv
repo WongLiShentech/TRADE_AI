@@ -209,3 +209,5 @@ id,event_key,timestamp,currency,impact,title,is_tier1,all_day,source,fetched_at
 373,df114554fb96b8d242cb566fdfda0236beb8eca4,2025-12-11 08:30:00,CHF,high,SNB Rate Decision,t,f,cb_spine,2026-06-07 16:04:29.494491
 374,8312e16bcfe47347fc74a63b50e892a0e530ef1e,2026-03-19 08:30:00,CHF,high,SNB Rate Decision,t,f,cb_spine,2026-06-07 16:04:29.494491
 375,14f0cb1cbd096a18a1ba13d6e7df48225440ea32,2026-06-18 07:30:00,CHF,high,SNB Rate Decision,t,f,cb_spine,2026-06-07 16:04:29.494491
+376,62c77fb5e3a27ff2dd6895ec9f70c5e6b69de36e,2026-09-04 12:30:00,USD,high,US Non-Farm Payrolls,t,f,fred_release,2026-08-28 20:15:00.210936
+379,650bd49a07048ee8f7511f226def06b83146687e,2026-09-11 12:30:00,USD,high,US CPI,t,f,fred_release,2026-08-28 20:15:00.210936
