@@ -7,6 +7,7 @@ from datetime import datetime, timezone, timedelta
 import httpx
 
 from app.brokers.base import (
+    TradeState,
     BrokerClient,
     InstrumentData,
     CandleData,
@@ -334,6 +335,73 @@ class OandaClient(BrokerClient):
         return OrderResult(
             broker_order_id=str(fill.get("id", "")),
             status="FILLED",
+            filled_price=float(fill["price"]),
+            units=abs(int(float(fill["units"]))),
+            # tradeOpened is present on a fill that opened a NEW position; a fill
+            # that merely reduced an existing one carries tradeReduced instead.
+            broker_trade_id=str((fill.get("tradeOpened") or {}).get("tradeID") or "") or None,
+        )
+
+    def get_trade_state(self, broker_trade_id: str) -> TradeState:
+        """Ask OANDA what became of one trade. Read-only.
+
+        This is how a stop that fired at 3am — while the process was restarting,
+        or the host was down — is discovered. Nothing else records it.
+        """
+        url = f"{self._base_url}/v3/accounts/{self._account_id}/trades/{broker_trade_id}"
+        headers = {"Authorization": f"Bearer {self._api_key}"}
+        with httpx.Client(timeout=10) as client:
+            response = client.get(url, headers=headers, follow_redirects=True)
+            response.raise_for_status()
+        t = response.json()["trade"]
+        closed = t.get("state") == "CLOSED"
+        close_time = None
+        if t.get("closeTime"):
+            raw = t["closeTime"].rstrip("Z")
+            if "." in raw:
+                head, frac = raw.split(".", 1)
+                raw = f"{head}.{frac[:6]}"
+            close_time = datetime.fromisoformat(raw).replace(tzinfo=timezone.utc)
+        return TradeState(
+            broker_trade_id=str(t["id"]),
+            state="CLOSED" if closed else "OPEN",
+            units=abs(int(float(t["initialUnits"]))),
+            open_price=float(t["price"]),
+            close_price=float(t["averageClosePrice"]) if t.get("averageClosePrice") else None,
+            realised_pnl=float(t["realizedPL"]) if t.get("realizedPL") is not None else None,
+            close_time=close_time,
+        )
+
+    def _close_position(self, instrument: str, units: int, direction: str) -> OrderResult:
+        """Close at market. Reached only through the guarded ``close_position``.
+
+        Closes by SIDE rather than by trade id: OANDA nets positions per instrument,
+        so the platform's one open trade per instrument is the whole side. Passing
+        'ALL' avoids a unit-count mismatch if a partial close ever occurred.
+        """
+        side_key = "longUnits" if direction.upper() == "BUY" else "shortUnits"
+        url = f"{self._base_url}/v3/accounts/{self._account_id}/positions/{instrument}/close"
+        headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json",
+        }
+        with httpx.Client(timeout=20) as client:
+            response = client.put(
+                url, headers=headers, json={side_key: "ALL"}, follow_redirects=True
+            )
+        body = response.json() if response.content else {}
+        fill_key = "longOrderFillTransaction" if direction.upper() == "BUY" else "shortOrderFillTransaction"
+        fill = body.get(fill_key)
+        if response.status_code >= 400 or not fill:
+            reason = body.get("errorMessage") or f"HTTP {response.status_code}"
+            logger.warning("OANDA close failed for %s: %s", instrument, reason)
+            return OrderResult(
+                broker_order_id="", status=f"CLOSE_FAILED:{reason}",
+                filled_price=None, units=0,
+            )
+        return OrderResult(
+            broker_order_id=str(fill.get("id", "")),
+            status="CLOSED",
             filled_price=float(fill["price"]),
             units=abs(int(float(fill["units"]))),
         )

@@ -19,6 +19,15 @@ from typing import TYPE_CHECKING, AsyncIterator, Optional
 from dataclasses import dataclass
 from datetime import datetime
 
+from app.domain.execution_mode import (  # noqa: F401 — re-exported
+    EXECUTION_MODE_LIVE,
+    EXECUTION_MODE_OBSERVE,
+    EXECUTION_MODE_SANDBOX,
+    EXECUTION_MODES,
+    PRACTICE_URL_MARKER,
+    normalise as normalise_execution_mode,
+)
+
 if TYPE_CHECKING:  # pragma: no cover — import only for type checking
     from app.config import Settings
 
@@ -70,6 +79,10 @@ class OrderResult:
     status: str
     filled_price: float | None
     units: int
+    # The broker's TRADE id, distinct from the transaction/order id above. This is
+    # the handle reconciliation needs to ask "what became of it?" later. Defaulted
+    # so every existing construction site stays valid.
+    broker_trade_id: str | None = None
 
 
 @dataclass
@@ -89,19 +102,34 @@ class PositionData:
     unrealised_pnl: float
 
 
-# ── execution modes (the venue a strategy is permitted to trade) ─────────────
-# A three-state mode rather than a boolean, because "no orders", "practice orders"
-# and "real money" are three genuinely different states and a boolean can only
-# express two. Collapsing them is how a sandbox flag becomes a live order.
-EXECUTION_MODE_OBSERVE = "observe"   # record decisions only — no order, any broker
-EXECUTION_MODE_SANDBOX = "sandbox"   # real order tickets, PRACTICE account only
-EXECUTION_MODE_LIVE = "live"         # real money — NOT IMPLEMENTED, blocked in base
-_EXECUTION_MODES = frozenset({EXECUTION_MODE_OBSERVE, EXECUTION_MODE_SANDBOX, EXECUTION_MODE_LIVE})
+# Execution modes are DOMAIN concepts, defined in app/domain/execution_mode.py and
+# re-exported here for callers that already import from this module. They cannot
+# live here: the shadow package carries a static guarantee (enforced by
+# tests/test_shadow_recorder.py) that it imports no broker module, yet the recorder
+# must know the mode to label a row 'shadow' vs 'sandbox'.
+_EXECUTION_MODES = EXECUTION_MODES
+_PRACTICE_URL_MARKER = PRACTICE_URL_MARKER
 
-# Practice and live are distinguished ONLY by the OANDA host (project rule: no
-# account-type setting exists). This marker is what makes "sandbox" verifiable
-# rather than merely asserted.
-_PRACTICE_URL_MARKER = "fxpractice"
+
+@dataclass
+class TradeState:
+    """What the BROKER says happened to a trade it holds.
+
+    The broker is the authority here, not this platform's ``trades`` table. A stop
+    can fire while the process is down, a redeploy can miss a fill, a position can
+    be closed from the broker's own UI — in every case the database is stale and
+    only the broker knows. Reconciliation reads this, never the other way round.
+
+    ``state`` is 'OPEN' | 'CLOSED'. Close fields are None while open.
+    """
+
+    broker_trade_id: str
+    state: str
+    units: int
+    open_price: float
+    close_price: float | None = None
+    realised_pnl: float | None = None
+    close_time: datetime | None = None
 
 
 class OrderPlacementDisabledError(RuntimeError):
@@ -198,7 +226,7 @@ class BrokerClient(ABC):
                 "order. Pass settings to super().__init__()."
             )
 
-        mode = str(getattr(self._settings, "EXECUTION_MODE", "")).strip().lower()
+        mode = normalise_execution_mode(getattr(self._settings, "EXECUTION_MODE", ""))
         rejected = f"Rejected: {order.direction} {order.units} {order.instrument}."
 
         # Unknown values fail CLOSED. A typo'd mode must never be permissive.
@@ -273,6 +301,43 @@ class BrokerClient(ABC):
     @abstractmethod
     def get_account(self) -> AccountInfo:
         raise NotImplementedError
+
+    def get_trade_state(self, broker_trade_id: str) -> "TradeState":
+        """What the broker says happened to one trade. Read-only.
+
+        Concrete-but-unimplemented rather than abstract, so a broker that has no
+        sandbox support yet does not break at import. Reconciliation calls this to
+        learn how a trade ACTUALLY ended — a stop that fired while this process was
+        down leaves no other trace.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement get_trade_state"
+        )
+
+    def close_position(self, instrument: str, units: int, direction: str) -> OrderResult:
+        """Close an open position at market. GUARDED — it moves money.
+
+        Routed through the same execution-mode gate as ``place_order``: closing is
+        an order like any other, and an ungated close path would be a second way to
+        reach the broker that the guard never sees.
+
+        This exists because OANDA enforces the stop and target attached to the
+        order, but knows nothing about ``SIGNAL_MAX_HOLD_BARS``. The time exit is
+        the one exit only this platform can apply.
+        """
+        self._assert_order_placement_enabled(
+            OrderRequest(
+                instrument=instrument, direction=direction, units=units,
+                order_type="MARKET", stop_loss=0.0, take_profit=0.0,
+            )
+        )
+        return self._close_position(instrument, units, direction)
+
+    def _close_position(self, instrument: str, units: int, direction: str) -> OrderResult:
+        """Broker-specific close. Called ONLY by :meth:`close_position`."""
+        raise NotImplementedError(
+            f"{type(self).__name__} does not implement _close_position"
+        )
 
     @abstractmethod
     def get_open_positions(self) -> list[PositionData]:

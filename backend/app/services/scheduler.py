@@ -160,6 +160,24 @@ def start_scheduler() -> BackgroundScheduler:
         coalesce=True,
         misfire_grace_time=_MISFIRE_GRACE_SECONDS,
     )
+    # Sandbox reconciliation + TIME EXIT. Registered unconditionally: turning
+    # sandbox recording off must never strand an OPEN POSITION, and the pass is a
+    # single indexed query when there is nothing to do. Minute 50 sits clear of the
+    # H4 (:01), fundamentals (:15), M1 (:20) and shadow resolver (:35) jobs.
+    #
+    # This job is the ONLY thing that applies SIGNAL_MAX_HOLD_BARS to a live
+    # position — OANDA enforces the attached stop and target, but knows nothing
+    # about a time limit. Hourly, not every 4h, so a trade that closes early is
+    # reconciled promptly rather than looking open for hours.
+    _scheduler.add_job(
+        _sandbox_sync,
+        CronTrigger(hour="*", minute=50, timezone="UTC"),
+        id="sandbox_sync",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=_MISFIRE_GRACE_SECONDS,
+    )
     # Fundamentals orchestration — Cron A (weekly reconcile at week-open) + Cron B
     # (intraday poll, every FUNDAMENTAL_INTRADAY_REFRESH_HOURS). Both refresh the news
     # spine (forward calendar) + macro (recent releases) idempotently. max_instances=1
@@ -284,6 +302,26 @@ def _make_trailing_window_job(code: str):
             logger.exception("%s_trailing_window_refresh failed", code.lower())
 
     return _job
+
+
+def _sandbox_sync() -> None:
+    """Reconcile open sandbox positions with the broker and apply the time exit.
+
+    Registered unconditionally and no-ops immediately outside sandbox mode. The
+    alternative — gating registration on the mode — would mean that switching back
+    to observe with a position open leaves it open forever, because the only job
+    that could close it is no longer scheduled.
+    """
+    settings = get_settings()
+    db = SessionLocal()
+    try:
+        result = sync_open_trades(db, settings)
+        if result.get("checked"):
+            logger.info("scheduled sandbox sync: %s", result)
+    except Exception:                                              # noqa: BLE001
+        logger.exception("scheduled sandbox sync failed")
+    finally:
+        db.close()
 
 
 def _shadow_resolver() -> None:

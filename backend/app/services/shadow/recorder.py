@@ -77,6 +77,11 @@ from typing import Optional
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.domain.execution_mode import (
+    EXECUTION_MODE_OBSERVE,
+    EXECUTION_MODE_SANDBOX,
+    normalise as normalise_execution_mode,
+)
 from app.config import Settings
 from app.domain.timeframes import get_timeframe
 from app.models.candle import Candle
@@ -92,6 +97,8 @@ logger = logging.getLogger(__name__)
 
 # ── persisted literals (named, never inline) ─────────────────────────────────
 STAGE_SHADOW = "shadow"
+# A row whose signal was actually sent to a broker (practice account).
+STAGE_SANDBOX = "sandbox"
 # The rule engine authored the signal; the model only observed it. A future
 # ML-authored signal would carry a different source — this is not "ml".
 SIGNAL_SOURCE_RULE_BASED = "rule_based"
@@ -231,6 +238,7 @@ def record_shadow_decision(
     *,
     signal_time: datetime,
     risk: RiskAssessment,
+    stage: Optional[str] = None,
 ) -> Optional[Trade]:
     """Score a live signal with the S1 artifact and persist ONE shadow ``Trade`` row.
 
@@ -263,9 +271,9 @@ def record_shadow_decision(
     """
     if not settings.SHADOW_MODE_ENABLED:
         return None
-    _assert_order_placement_disabled(settings)
+    _assert_order_placement_disabled(settings, stage)
 
-    if _existing_shadow_row(db, instrument.id, signal_time) is not None:
+    if _existing_shadow_row(db, instrument.id, signal_time, stage) is not None:
         logger.debug(
             "shadow: row already exists for %s @ %s — skipping duplicate write",
             instrument.symbol, signal_time,
@@ -275,6 +283,15 @@ def record_shadow_decision(
     nan_keys = _nan_model_features(features)
     _warn_if_degraded(settings, instrument, signal_time, nan_keys)
     decision, ml_error = _score_safely(loaded_model, features, settings)
+
+    # Which stage this row belongs to. Derived HERE because this is the only point
+    # that holds the decision, the risk verdict and the execution mode together —
+    # and the stage must tell the truth about whether an order will be sent.
+    #   sandbox mode + take + risk approved  -> 'sandbox' (an order follows)
+    #   anything else                        -> 'shadow'  (none will)
+    # An explicit `stage` argument still wins, so tests and backfills can pin it.
+    if stage is None:
+        stage = _derive_stage(settings, decision, risk)
 
     stop_distance = abs(signal.entry - signal.stop)
     reward = abs(signal.target - signal.entry)
@@ -293,7 +310,7 @@ def record_shadow_decision(
         rr_entry=(reward / stop_distance) if stop_distance else 0.0,
         rr_actual=None,
         signal_source=SIGNAL_SOURCE_RULE_BASED,
-        stage=STAGE_SHADOW,
+        stage=stage,
         outcome=None,          # Phase 3
         exit_reason=None,      # Phase 3
         ambiguous_resolution=False,
@@ -334,27 +351,61 @@ def record_shadow_decision(
 
 
 # ── internals ────────────────────────────────────────────────────────────────
-def _assert_order_placement_disabled(settings: Settings) -> None:
-    """Second, independent safety check at the WRITE site (see module docstring)."""
-    if settings.ORDER_PLACEMENT_ENABLED is not False:
+def _derive_stage(settings: Settings, decision, risk) -> str:
+    """Pick the stage a row belongs to. See the call site for the reasoning."""
+    mode = normalise_execution_mode(getattr(settings, "EXECUTION_MODE", ""))
+    if mode != EXECUTION_MODE_SANDBOX:
+        return STAGE_SHADOW
+    if decision is None or decision.decision != "take":
+        return STAGE_SHADOW
+    if not risk.passed or risk.units <= 0:
+        # A risk-rejected signal is never traded, whatever the model thinks, so no
+        # order follows and 'shadow' is the honest label.
+        return STAGE_SHADOW
+    return STAGE_SANDBOX
+
+
+def _assert_order_placement_disabled(settings: Settings, stage: str) -> None:
+    """Second, independent safety check at the WRITE site (see module docstring).
+
+    The invariant this protects is about the STAGE LABEL, not about orders in
+    general: a ``stage='shadow'`` row asserts "this decision was observed and no
+    order was placed". If that claim can be false, every shadow analysis is
+    measuring something other than what it says.
+
+    Originally that meant forbidding orders outright, because shadow was the only
+    mode. With sandbox, a 'take' is written as ``stage='sandbox'`` (an order WAS
+    placed) and a 'skip' stays ``stage='shadow'`` (none was) — so the claim stays
+    true in both, and the check narrows to exactly the case that would break it:
+    a shadow-labelled row written by a process permitted to trade.
+    """
+    if stage != STAGE_SHADOW:
+        return
+    mode = normalise_execution_mode(getattr(settings, "EXECUTION_MODE", ""))
+    if mode == EXECUTION_MODE_OBSERVE:
+        return
+    # In sandbox/live a shadow-labelled row is only honest for a decision that
+    # placed no order — i.e. a skip, or a risk-rejected signal. The caller routes
+    # takes to stage='sandbox'; reaching here with a take means that routing broke.
+    if settings.ORDER_PLACEMENT_ENABLED is True:
         raise RuntimeError(
-            "refusing to record a shadow decision while ORDER_PLACEMENT_ENABLED is "
-            f"{settings.ORDER_PLACEMENT_ENABLED!r}. Shadow mode exists to OBSERVE a "
-            "model without trading it; a process permitted to place orders must not "
-            "be writing shadow rows. Set ORDER_PLACEMENT_ENABLED=false, or set "
-            "SHADOW_MODE_ENABLED=false."
+            f"refusing to write a stage='{STAGE_SHADOW}' row while "
+            f"EXECUTION_MODE={mode!r} and ORDER_PLACEMENT_ENABLED is True. A shadow "
+            "row asserts that NO order was placed; a process permitted to trade must "
+            "route taken signals to stage='sandbox' instead. This is a routing bug, "
+            "not a configuration one."
         )
 
 
 def _existing_shadow_row(
-    db: Session, instrument_id: int, signal_time: datetime
+    db: Session, instrument_id: int, signal_time: datetime, stage: str = STAGE_SHADOW
 ) -> Optional[int]:
     """Natural-key guard: one shadow row per (instrument, signal_time)."""
     row = (
         db.query(Trade.id)
         .filter(
             Trade.instrument_id == instrument_id,
-            Trade.stage == STAGE_SHADOW,
+            Trade.stage == stage,
             Trade.opened_at == signal_time,
         )
         .first()

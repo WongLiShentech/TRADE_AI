@@ -450,10 +450,17 @@ def _observe_shadow(
         features = build_features(
             inst, signal_time, output.granularity, output.score_breakdown, db, settings
         )
+        # ONE write path, one scoring call. The recorder derives the stage from the
+        # decision + risk verdict + execution mode, so the row already says truthfully
+        # whether an order is about to be sent.
         trade = record_shadow_decision(
             db, settings, inst, output, features, loaded_model,
             signal_time=signal_time, risk=risk,
         )
+        # Row exists BEFORE the ticket — a position with no row would be invisible to
+        # this platform and would never receive its time exit. See sandbox.executor.
+        if trade is not None and trade.stage == sandbox.STAGE_SANDBOX:
+            sandbox.place_for_trade(db, settings, trade, inst, output)
         return SHADOW_RECORDED if trade is not None else SHADOW_SKIPPED
     except Exception as exc:  # noqa: BLE001 — shadow observation is never load-bearing
         db.rollback()
