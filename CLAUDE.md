@@ -82,6 +82,7 @@ Proceed? (yes / no / modify)
 - Keep reports concise — bullet points over paragraphs
 - Save all output files to the output folder
 - **Data leakage in ML training is never acceptable — walk-forward splits only, no random shuffle, no feature value from after the signal timestamp, no full-dataset normalization, 14-bar embargo between in-sample and OOS. Systematic NaN across old rows requires backfill before training.**
+- **Excursion data (`trades.mfe_r`/`mae_r`, everything in `trade_paths`) is post-signal by construction: valid as a LABEL, never as a FEATURE.** Train a model to *predict* how far a trade will run; never tell it how far this one ran. The one legal feature-side use is strictly point-in-time aggregates over trades that had already CLOSED before the signal being scored. Enforced by `tests/test_feature_builder.py::test_excursion_fields_are_never_model_features`, which guards the namespace rather than a fixed list.
 - Cite sources when doing research
 - **Zero hardcoding — no broker names, API keys, URLs, credentials, instrument pairs, asset classes, or magic strings anywhere in business logic**
 - **Zero assumptions about which instruments are active — discover at runtime from broker**
@@ -338,6 +339,13 @@ class Settings(BaseSettings):
     SHADOW_RESOLVER_INTERVAL_HOURS: int      # outcome-resolution cron cadence
     M1_LIVE_LOOKBACK_HOURS: int              # trailing M1 window refetched hourly (6)
 
+    # Excursion recording (Phase A — attribution layer)
+    PATH_RECORDING_ENABLED: bool             # record MFE/MAE + per-bar path on resolution
+    PATH_EXTENDED_BARS: int                  # bars to keep walking AFTER the exit (20) — answers
+                                             # "should we have held longer?"; tagged beyond_exit and
+                                             # EXCLUDED from mfe_r/mae_r, which describe the trade
+                                             # that actually happened
+
     # Circuit breaker + alerts
     MIN_WIN_RATE_ALERT: float                # e.g. 0.45
     MAX_DRAWDOWN_ALERT: float                # e.g. 0.20
@@ -406,10 +414,33 @@ app/services/
 ├── fundamental/             ← ABC + FRED (macro_data pipeline) + staleness watchdog
 ├── backtester/              ← M7: simulator.py, metrics.py, runner.py (walk-forward + promotion gate)
 ├── ml/                      ← S1: dataset, pipeline, model, policy, evaluate, shap_analysis, artifact, inference
-├── shadow/                  ← M8-Shadow: recorder.py (live decisions), resolver.py (outcome resolution)
+├── shadow/                  ← M8-Shadow: recorder.py (live decisions), resolver.py (outcome resolution
+│                              + excursion persistence — Phase A)
 │                              (deploy: DEPLOYMENT.md; seed: scripts/export_slim_seed.py;
 │                               optional Pi retention: scripts/prune_m1_candles.py — NEVER on dev)
 └── alerts/                  ← ABC + log (default) + email + telegram (both stubs)
+```
+
+### 7b. Attribution tables (Phase A — multi-strategy / autonomy substrate)
+
+```
+strategies        ← registry of parameterised signal configs. `trades.signal_source`
+                    names the ENGINE ('rule_based'), NOT the configuration; identity
+                    here is `params_hash` (engine + signal-affecting params), the same
+                    pattern ML artifacts use. Status: research | shadow | live | retired.
+                    ⚠️ Several `shadow` at once is free. Several `live` at once DOUBLES
+                    risk on a shared view — portfolio capital allocation does not exist
+                    yet, so keep at most one strategy `live`.
+model_decisions   ← one model's verdict per signal, MANY rows per trade. `trades.ml_*`
+                    holds ONE opinion, so a challenger rescoring history overwrites the
+                    champion's — making "where they disagreed, who was right?"
+                    unanswerable, which is exactly what promotion depends on.
+                    `is_authoritative` marks the verdict that actually governed the row.
+trade_paths       ← per-bar excursion in R. `rr_actual` alone cannot distinguish a trade
+                    that peaked at +0.84R from one that never moved. Rows past the exit
+                    are tagged `beyond_exit` and excluded from mfe_r/mae_r.
+trades.mfe_r/mae_r ← intrabar-exact extremes, denormalised so "average MFE of losers" is
+                    one GROUP BY. Invariant, asserted in tests: mae_r ≤ rr_actual ≤ mfe_r.
 ```
 
 ### 8. API endpoints (all under /api/v1/)
