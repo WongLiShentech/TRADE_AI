@@ -100,8 +100,11 @@ from app.models.candle import Candle  # noqa: E402
 from app.models.indicator import Indicator  # noqa: E402
 from app.models.instrument import Instrument  # noqa: E402
 from app.models.macro_data import MacroData  # noqa: E402
+from app.models.model_decision import ModelDecision  # noqa: E402
 from app.models.news_calendar_event import NewsCalendarEvent  # noqa: E402
+from app.models.strategy import Strategy  # noqa: E402
 from app.models.trade import Trade  # noqa: E402
+from app.models.trade_path import TradePath  # noqa: E402
 
 # ── defaults (overridable on the command line; nothing here is a magic constant
 # buried in business logic — this is an ops script and every number is a CLI arg) ──
@@ -231,12 +234,41 @@ def build_exports(
             ),
         ),
     ]
+    # Strategies ship UNCONDITIONALLY and BEFORE trades: `trades.strategy_id` is a
+    # foreign key into it, so loading trades first would fail, and a deployment with
+    # no strategy registry cannot attribute the signals it records. The table is a
+    # handful of rows.
+    exports.append(
+        _full_table_export(
+            Strategy,
+            "ALL rows — the signal-configuration registry. `trades.strategy_id` FKs "
+            "here, so it must load first. Identity is `params_hash`; a parameter "
+            "change yields a new row rather than silently pooling with the old one.",
+        )
+    )
     if include_trades:
         exports.append(
             _full_table_export(
                 Trade,
                 "ALL rows — M7 backtest corpus (S1 training set) + any recorded shadow "
                 "rows. ~12 MB. Omit with --no-trades for an observation-only deploy.",
+            )
+        )
+        # Both FK into trades, so they load AFTER it and only when it is present.
+        exports.append(
+            _full_table_export(
+                ModelDecision,
+                "ALL rows — one model's verdict per signal, many per trade. Without "
+                "these a challenger cannot be compared against the champion on shared "
+                "history, which is what promotion depends on.",
+            )
+        )
+        exports.append(
+            _full_table_export(
+                TradePath,
+                "ALL rows — per-bar excursion (~28 rows per trade, ~15 MB at 7k trades). "
+                "Reconstructible from M1 in principle, but the server ships NO M1, so "
+                "for historical trades this seed is the only source it will ever have.",
             )
         )
     return exports
