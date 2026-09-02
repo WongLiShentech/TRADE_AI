@@ -28,3 +28,7 @@ backend/models/
 # IDE
 .vscode/
 .idea/
+
+# Seed artifacts — regenerated data, not source. Ships via scp, not git.
+output/slim_seed/
+output/slim_seed.tar.gz
