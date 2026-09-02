@@ -32,3 +32,5 @@ backend/models/
 # Seed artifacts — regenerated data, not source. Ships via scp, not git.
 output/slim_seed/
 output/slim_seed.tar.gz
+output/attr_sync/
+output/attr_sync.tar.gz
