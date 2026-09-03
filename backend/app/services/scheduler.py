@@ -46,6 +46,7 @@ from app.services.pipeline import (
     run_candle_refresh_pipeline,
     run_trailing_window_refresh,
 )
+from app.services.sandbox.executor import sync_open_trades
 from app.services.shadow import resolve_pending
 from app.services.wiki_ingestor import ingest_journal
 from app.services.wiki_promoter import promote_pages

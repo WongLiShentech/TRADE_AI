@@ -54,6 +54,7 @@ from app.services import candle_service, indicator_service
 from app.services.feature_builder import build_features
 from app.services.ml import inference as inf
 from app.services.risk_engine import RiskEngine, RiskValidationError, ValidatedSignal
+from app.services.sandbox import executor as sandbox
 from app.services.shadow import RiskAssessment, live_signal_time, record_shadow_decision
 from app.services.signal_engine.base import SignalOutput
 from app.services.signal_engine.factory import get_signal_engine
