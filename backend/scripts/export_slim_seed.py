@@ -100,6 +100,7 @@ from app.models.candle import Candle  # noqa: E402
 from app.models.indicator import Indicator  # noqa: E402
 from app.models.instrument import Instrument  # noqa: E402
 from app.models.macro_data import MacroData  # noqa: E402
+from app.models.ml_model import MLModel  # noqa: E402
 from app.models.model_decision import ModelDecision  # noqa: E402
 from app.models.news_calendar_event import NewsCalendarEvent  # noqa: E402
 from app.models.strategy import Strategy  # noqa: E402
@@ -244,6 +245,18 @@ def build_exports(
             "ALL rows — the signal-configuration registry. `trades.strategy_id` FKs "
             "here, so it must load first. Identity is `params_hash`; a parameter "
             "change yields a new row rather than silently pooling with the old one.",
+        )
+    )
+    # Models ship UNCONDITIONALLY and AFTER strategies (FK into it), but BEFORE
+    # trades: without the registry a deployment cannot say what the `ml_model_id`
+    # strings in its own rows refer to. A handful of rows; no artifact bytes — the
+    # .joblib files travel with the repo, this is only what describes them.
+    exports.append(
+        _full_table_export(
+            MLModel,
+            "ALL rows — the trained-artifact registry. `strategy_id` records which "
+            "strategy's outcomes taught each model, which matters because labels "
+            "derive from `rr_actual` and `rr_actual` depends on the exit rule.",
         )
     )
     if include_trades:

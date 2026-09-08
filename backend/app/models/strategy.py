@@ -56,6 +56,13 @@ class Strategy(Base):
     params_hash: Mapped[str] = mapped_column(String, nullable=False)   # identity
     params: Mapped[dict] = mapped_column(JSON, nullable=False)         # the frozen config
     status: Mapped[str] = mapped_column(String, nullable=False)        # see docstring
+    # WHAT THIS STRATEGY IS — stable and definitional. It changes only when the
+    # configuration changes, which by definition produces a new params_hash and
+    # therefore a new row. Kept apart from `notes` because a definition buried
+    # under accumulated commentary stops being readable at exactly the moment a
+    # second strategy exists to compare it against.
+    description: Mapped[str | None] = mapped_column(String, nullable=True)
+    # WHAT HAPPENED TO IT — operational, and expected to grow over time.
     notes: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()
