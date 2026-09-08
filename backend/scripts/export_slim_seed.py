@@ -46,9 +46,12 @@ Deliberately NOT exported
 ``alembic_version``  — written by ``alembic upgrade head`` on the target. Seeding it
                        would pin the target to the source's revision even if the
                        target schema differs.
-``signals`` / ``orders`` / ``equity_points`` / ``bot_state`` / ``backtest_runs``
+``signals`` / ``orders`` / ``equity_points`` / ``bot_state``
                      — operational state of the SOURCE host. A fresh deployment
                        starts its own; ``bot_state`` is created by the app lifespan.
+                       ``backtest_runs`` USED to be excluded on the same grounds;
+                       it is now shipped because ``trades.run_id`` references it,
+                       and loading trades against absent runs aborts the seed.
 
 Output format
 -------------
@@ -96,6 +99,7 @@ if str(BACKEND_ROOT) not in sys.path:
 
 from app.database import engine  # noqa: E402
 from app.domain.timeframes import TIMEFRAMES  # noqa: E402
+from app.models.backtest_run import BacktestRun  # noqa: E402
 from app.models.candle import Candle  # noqa: E402
 from app.models.indicator import Indicator  # noqa: E402
 from app.models.instrument import Instrument  # noqa: E402
@@ -106,6 +110,7 @@ from app.models.news_calendar_event import NewsCalendarEvent  # noqa: E402
 from app.models.strategy import Strategy  # noqa: E402
 from app.models.trade import Trade  # noqa: E402
 from app.models.trade_path import TradePath  # noqa: E402
+from app.models.training_dataset import TrainingDataset  # noqa: E402
 
 # ── defaults (overridable on the command line; nothing here is a magic constant
 # buried in business logic — this is an ops script and every number is a CLI arg) ──
@@ -247,10 +252,31 @@ def build_exports(
             "change yields a new row rather than silently pooling with the old one.",
         )
     )
-    # Models ship UNCONDITIONALLY and AFTER strategies (FK into it), but BEFORE
-    # trades: without the registry a deployment cannot say what the `ml_model_id`
-    # strings in its own rows refer to. A handful of rows; no artifact bytes — the
-    # .joblib files travel with the repo, this is only what describes them.
+    # Backtest runs ship BECAUSE `trades.run_id` FKs into them. They were previously
+    # excluded as "operational state of the source host" — true when nothing pointed
+    # at them, and fatal now: loading trades that reference absent runs violates the
+    # FK and aborts the whole seed.
+    exports.append(
+        _full_table_export(
+            BacktestRun,
+            "ALL rows — one per backtest execution. `trades.run_id` FKs here, so the "
+            "seed cannot load without them. Also carries the git provenance of the "
+            "code that produced each corpus.",
+        )
+    )
+    # Datasets sit after strategies and runs (FK into both) and before models.
+    exports.append(
+        _full_table_export(
+            TrainingDataset,
+            "ALL rows — the corpus each model trained on, as a definition plus a "
+            "content fingerprint. Without it a deployed model can name its data but "
+            "not prove what that data was.",
+        )
+    )
+    # Models ship UNCONDITIONALLY and AFTER strategies and datasets (FK into both),
+    # but BEFORE trades: without the registry a deployment cannot say what the
+    # `ml_model_id` strings in its own rows refer to. A handful of rows; no artifact
+    # bytes — the .joblib files travel with the repo, this is only what describes them.
     exports.append(
         _full_table_export(
             MLModel,

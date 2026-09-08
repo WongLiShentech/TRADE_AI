@@ -190,3 +190,50 @@ def test_explicit_strategy_id_adds_a_filter_and_skips_the_guard():
         load_dataset(db, 1.0, strategy_id=1)
     assert "mixes strategy_id" not in str(exc.value)
     assert db.q.filters == 2  # stage filter + strategy filter
+
+
+# ── deterministic row order (reproducibility) ────────────────────────────────
+def test_corpus_order_is_total_and_reproducible(db, settings, corpus_strategy_id):
+    """`ORDER BY opened_at` alone is NOT a total order on this corpus.
+
+    Roughly 1,865 timestamps are shared by two or more trades — every pair signalling
+    on the same H4 close — and Postgres may return tied rows in any order, differing
+    between machines and after a dump/restore or VACUUM.
+
+    That is not cosmetic. `train_production_model` splits train from validation
+    POSITIONALLY, and on the strategy-1 corpus that boundary falls inside a group of
+    three rows sharing one timestamp. Without a tie-break, `best_iteration`, the
+    deployment threshold and the resulting `params_hash` could all vary run to run on
+    byte-identical data — which was silently true until the dataset fingerprint made
+    two machines disagree.
+    """
+    import pandas as pd
+
+    ds = load_dataset(db, settings.ML_LABEL_THRESHOLD_R, strategy_id=corpus_strategy_id)
+    st = pd.Series(ds.frame["signal_time"])
+
+    # The hazard must actually exist, or this test proves nothing.
+    assert st.duplicated().any(), (
+        "no tied timestamps in this corpus — the ordering hazard this guards is "
+        "absent, so the guard is untested rather than satisfied"
+    )
+    # Chronological order must still hold.
+    assert st.is_monotonic_increasing, "corpus is not in chronological order"
+
+    # And the load must be repeatable within a process.
+    again = load_dataset(db, settings.ML_LABEL_THRESHOLD_R, strategy_id=corpus_strategy_id)
+    assert ds.fingerprint() == again.fingerprint()
+
+
+def test_load_dataset_breaks_timestamp_ties_on_a_stable_key():
+    """Guards the tie-break itself: chronological order plus a stable surrogate.
+    `id` survives dump/restore, so the order is identical across machines."""
+    import inspect
+
+    from app.services.ml import dataset as dataset_mod
+
+    src = inspect.getsource(dataset_mod.load_dataset)
+    assert "Trade.id.asc()" in src, (
+        "load_dataset must break opened_at ties on a stable key, or row order — and "
+        "therefore the train/validation split — is at the database's discretion"
+    )

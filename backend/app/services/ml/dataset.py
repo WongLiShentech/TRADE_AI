@@ -129,7 +129,21 @@ def load_dataset(
     q = db.query(Trade).filter(Trade.stage == _STAGE)
     if strategy_id is not None:
         q = q.filter(Trade.strategy_id == strategy_id)
-    trades = q.order_by(Trade.opened_at.asc()).all()
+    # `opened_at` ALONE IS NOT A TOTAL ORDER. 1,865 timestamps in the strategy-1
+    # corpus are shared by two or more trades — every pair signalling on the same H4
+    # close — and Postgres is free to return tied rows in any order, which changes
+    # between machines and after a dump/restore or a VACUUM.
+    #
+    # Row order is not cosmetic here. `train_production_model` splits train from
+    # validation POSITIONALLY (`range(0, n - n_val)`), and on this corpus that
+    # boundary lands at row 5,659 — inside a group of three rows sharing one
+    # timestamp. So which rows are used for early stopping, and therefore
+    # `best_iteration`, the deployment threshold and the resulting `params_hash`,
+    # could vary run to run on byte-identical data.
+    #
+    # `id` is a stable surrogate that survives dump/restore, making the order total
+    # and reproducible across machines.
+    trades = q.order_by(Trade.opened_at.asc(), Trade.id.asc()).all()
     if not trades:
         raise RuntimeError(
             f"no trades with stage='{_STAGE}'"

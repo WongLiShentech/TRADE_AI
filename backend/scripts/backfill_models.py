@@ -25,7 +25,7 @@ sys.path.insert(0, str(BACKEND_ROOT))
 from sqlalchemy import select
 
 from app.database import SessionLocal
-from app.models import MLModel, Strategy
+from app.models import MLModel, Strategy, TrainingDataset
 
 MODELS_DIR = BACKEND_ROOT / "models"
 
@@ -39,7 +39,13 @@ MODELS_DIR = BACKEND_ROOT / "models"
 CURATION = {
     "s1_xgb_v1_26882eac6c29": {
         "strategy_name": "rule_based_v1",
+        "version": 1,
         "status": "retired",
+        # n_trials was not recorded when v1 was trained and cannot be reconstructed:
+        # the counter is derived from a live sequence, so reading it today would give
+        # today's value, not the one v1's results were discounted by.
+        "n_trials": None,
+        "n_trials_source": None,
         "description": (
             "First XGBoost signal filter. 20 features (schema v1), 2,809 backtest "
             "trades over 2 years. Predates the promotion gate, so it was never "
@@ -48,7 +54,15 @@ CURATION = {
     },
     "s1_xgb_v2_c430d22dd1ab.NOT_PROMOTED": {
         "strategy_name": "rule_based_v1",
+        "version": 2,
         "status": "shadow",
+        # Recovered from output/s1_experiment_log.json, which recorded the value used
+        # at training time. The source string is not decoration: the counter is
+        # derived from backtest_runs_id_seq GLOBALLY, so it differs by host (local
+        # reads 7, the server 1) and counts looks at other strategies' data. A bare
+        # integer would be uninterpretable in six months.
+        "n_trials": 7,
+        "n_trials_source": "backtest_runs_id_seq (global, local host) @ 2026-07-11",
         "description": (
             "Current shadow model. 19 features (schema v2), 7,074 backtest trades "
             "over 5 years. Failed the promotion gate on fold-1 expectancy "
@@ -57,6 +71,10 @@ CURATION = {
         ),
     },
 }
+
+# git provenance is NOT curated for v1/v2. Both were trained before it was captured,
+# and `git log --before <created_at>` would find the commit that EXISTED, not the one
+# that ran — a fabrication dressed as evidence. NULL is the honest value.
 
 STRATEGY_DESCRIPTIONS = {
     "rule_based_v1": (
@@ -69,6 +87,48 @@ STRATEGY_DESCRIPTIONS = {
 
 def _dt(value):
     return datetime.fromisoformat(value) if value else None
+
+
+def _resolve_dataset(db, meta: dict, strategy, model_id: str):
+    """The dataset row this model trained on — but only when it can be PROVEN.
+
+    Two paths, and both must prove rather than assume:
+
+    * A model trained after fingerprinting existed carries its own
+      ``dataset_fingerprint``. Match on it and the link is exact.
+    * v1 and v2 predate it, so the only available evidence is that the strategy's
+      corpus TODAY still has the row count and span the artifact recorded at training
+      time. If the corpus has changed since, linking would attach the model to data it
+      never saw — precisely the confusion the datasets table exists to end — so the
+      link is refused and the reason printed.
+    """
+    fp = meta.get("dataset_fingerprint")
+    if fp:
+        row = db.execute(
+            select(TrainingDataset).where(TrainingDataset.fingerprint == fp)
+        ).scalar_one_or_none()
+        if row is None:
+            print(f"  NOTE  {model_id}: fingerprint {fp[:12]} has no dataset row")
+        return row.id if row else None
+
+    if strategy is None:
+        return None
+    span = meta.get("training_span", {})
+    rows, start, end = span.get("n_rows"), _dt(span.get("start")), _dt(span.get("end"))
+    candidate = db.execute(
+        select(TrainingDataset).where(TrainingDataset.strategy_id == strategy.id)
+    ).scalars().first()
+    if candidate is None:
+        return None
+    if candidate.n_rows != rows:
+        print(f"  NOTE  {model_id}: corpus now has {candidate.n_rows} rows, model "
+              f"recorded {rows} — NOT linking (it trained on different data)")
+        return None
+    if start and candidate.span_start and abs((candidate.span_start - start).days) > 1:
+        print(f"  NOTE  {model_id}: corpus span moved ({candidate.span_start} vs "
+              f"{start}) — NOT linking")
+        return None
+    return candidate.id
 
 
 def main() -> None:
@@ -99,6 +159,7 @@ def main() -> None:
             strategy = strategies.get(cur["strategy_name"])
             fields = dict(
                 strategy_id=strategy.id if strategy else None,
+                version=cur.get("version"),
                 trained_on_stages="backtest",
                 training_start=_dt(span.get("start")),
                 training_end=_dt(span.get("end")),
@@ -108,6 +169,12 @@ def main() -> None:
                 # is the honest value; False would invent a verdict.
                 passed_gate=meta.get("promoted"),
                 status=cur["status"],
+                n_trials=cur.get("n_trials"),
+                n_trials_source=cur.get("n_trials_source"),
+                # Present only for models trained after provenance capture existed.
+                git_commit=meta.get("git_commit"),
+                git_dirty=meta.get("git_dirty"),
+                dataset_id=_resolve_dataset(db, meta, strategy, model_id),
                 description=cur["description"],
             )
 
