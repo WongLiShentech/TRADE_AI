@@ -1,10 +1,16 @@
 """S1 — train + evaluate the XGBoost signal-filter on the M7 rule-engine corpus.
 
-Run from ``backend/``:
-    python scripts/train_s1.py
+Run from ``backend/`` — both variables are REQUIRED::
+
+    S1_STRATEGY_ID=2 S1_MODEL_VERSION=3 python scripts/train_s1.py
+
+``S1_STRATEGY_ID`` because labels derive from ``rr_actual`` and ``rr_actual`` depends
+on the exit rule, so "the backtest corpus" is no longer one thing. ``S1_MODEL_VERSION``
+because it enters the artifact's identity and filename — guessing it risks colliding
+with an artifact the live server loads.
 
 Pipeline (single specified recipe — no hyperparameter iteration):
-  1. Load the ``stage='backtest'`` corpus (20 locked model features + label).
+  1. Load that strategy's ``stage='backtest'`` corpus (locked feature contract + label).
   2. Walk-forward evaluate the ML-FILTERED strategy on M7's three expanding folds,
      compared side-by-side against the unfiltered rule baseline, through the SAME
      promotion gate (deflated Sharpe uses the durable honest trial count).
@@ -38,11 +44,18 @@ from app.services.ml.evaluate import (
     evaluate_walk_forward,
     keep_fraction_report,
 )
+from app.services.provenance import git_provenance
 
 _OUTPUT_DIR = BACKEND_ROOT.parent / "output"
-# Which strategy's corpus to train on. Overridable so a second strategy can be
-# trained without editing the script; the default preserves M7/S1 behaviour.
+# Which strategy's corpus to train on. REQUIRED: labels derive from rr_actual, which
+# depends on the exit rule, so "the backtest corpus" stopped being a single thing the
+# moment a second strategy was registered.
 _STRATEGY_ID = int(os.environ["S1_STRATEGY_ID"]) if os.environ.get("S1_STRATEGY_ID") else None
+# The sequential MODEL version (1, 2, 3...), NOT the feature schema version. It enters
+# the artifact's params_hash and its filename, so it is required rather than defaulted:
+# a wrong guess can collide with an existing artifact, and the one on disk is what the
+# live server loads.
+_MODEL_VERSION = int(os.environ["S1_MODEL_VERSION"]) if os.environ.get("S1_MODEL_VERSION") else None
 _MODELS_DIR = BACKEND_ROOT / "models"
 
 
@@ -140,10 +153,30 @@ def main() -> None:
     settings = get_settings()
     db = SessionLocal()
     try:
+        if _STRATEGY_ID is None:
+            raise SystemExit(
+                "S1_STRATEGY_ID is required. Training must name the strategy whose "
+                "outcomes it learns from: labels derive from rr_actual and rr_actual "
+                "depends on the exit rule, so a corpus spanning two strategies teaches "
+                "two contradictory definitions of a win."
+            )
+        if _MODEL_VERSION is None:
+            raise SystemExit(
+                "S1_MODEL_VERSION is required. It is the sequential MODEL version "
+                "(1, 2, 3...), NOT the feature schema version — and it is part of the "
+                "artifact's identity, so guessing it risks overwriting a live model."
+            )
+
         dataset = load_dataset(db, settings.ML_LABEL_THRESHOLD_R, strategy_id=_STRATEGY_ID)
         n_pos = int(dataset.y.sum())
-        print(f"[train_s1] corpus={len(dataset)} rows  positives(>= "
+        print(f"[train_s1] strategy={_STRATEGY_ID} version={_MODEL_VERSION} "
+              f"corpus={len(dataset)} rows  positives(>= "
               f"{settings.ML_LABEL_THRESHOLD_R}R)={n_pos} ({n_pos/len(dataset):.1%})", flush=True)
+
+        provenance = git_provenance()
+        print(f"[train_s1] code: {provenance.commit or 'unknown'}"
+              f"{' (DIRTY — uncommitted changes)' if provenance.dirty else ''}", flush=True)
+        print(f"[train_s1] dataset fingerprint: {dataset.fingerprint()}", flush=True)
 
         n_trials = _durable_n_trials(db)
         print(f"[train_s1] honest n_trials (durable counter) = {n_trials}", flush=True)
@@ -151,7 +184,9 @@ def main() -> None:
         result = evaluate_walk_forward(db, settings, n_trials, dataset=dataset)
 
         print("[train_s1] training production candidate on ALL rows...", flush=True)
-        candidate = train_production_model(dataset, settings)
+        candidate = train_production_model(
+            dataset, settings, version=_MODEL_VERSION, provenance=provenance
+        )
         # QA fix (a): tag the artifact with the walk-forward gate verdict so a
         # DO-NOT-PROMOTE candidate can never be silently deployed.
         artifact_paths = save_artifact(candidate, _MODELS_DIR, promoted=result.ml_passed)

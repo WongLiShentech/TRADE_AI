@@ -35,6 +35,7 @@ from app.services.ml.model import best_iteration, build_model, fit_with_early_st
 from app.services.ml.pipeline import build_encoder
 from app.services.ml.policy import select_threshold
 from app.services.ml.shap_analysis import ShapImportances, global_importances
+from app.services.provenance import GitProvenance, git_provenance
 
 
 @dataclass
@@ -46,8 +47,33 @@ class ProductionCandidate:
     shap: ShapImportances
 
 
-def train_production_model(dataset: Dataset, settings: Settings) -> ProductionCandidate:
-    """Train the deployable candidate on ALL corpus rows (fixed seed, single recipe)."""
+def train_production_model(
+    dataset: Dataset,
+    settings: Settings,
+    *,
+    version: int,
+    provenance: GitProvenance | None = None,
+) -> ProductionCandidate:
+    """Train the deployable candidate on ALL corpus rows (fixed seed, single recipe).
+
+    Args:
+        dataset: the corpus to fit. Its ``fingerprint()`` enters ``params_hash``, so
+            two models trained on different data can never share an identity.
+        settings: hyperparameters and the validation/threshold policy.
+        version: sequential MODEL version — 1, 2, 3 — and not the feature schema
+            version, which is what the old ``s1_xgb_v2_*`` filenames actually encoded.
+            REQUIRED and keyword-only: a default would silently mislabel every future
+            model, and the one call site knows the answer.
+        provenance: which code is doing the training. Defaults to reading git here.
+            Recorded in metadata, deliberately NOT hashed — see ``_build_metadata``.
+
+    Note:
+        ``version`` is passed in rather than looked up from the database on purpose.
+        This module must stay DB-free: ``ml/constants.py`` exists precisely so the
+        always-on serving path can read the promotion marker without importing this
+        module and dragging `shap` (+96 MB RSS) into the process. Taking a Session
+        here would reverse that.
+    """
     x = dataset.X
     y = dataset.y
     rr = dataset.rr
@@ -78,7 +104,11 @@ def train_production_model(dataset: Dataset, settings: Settings) -> ProductionCa
     pipeline = Pipeline([("encoder", enc_all), ("model", final)])
     shap_imp = global_importances(final, enc_all, x)
 
-    metadata = _build_metadata(dataset, settings, enc_all, n_trees, choice.threshold, shap_imp)
+    metadata = _build_metadata(
+        dataset, settings, enc_all, n_trees, choice.threshold, shap_imp,
+        version=version,
+        provenance=provenance if provenance is not None else git_provenance(),
+    )
     return ProductionCandidate(pipeline=pipeline, metadata=metadata, shap=shap_imp)
 
 
@@ -112,7 +142,23 @@ def save_artifact(
     meta["promoted"] = bool(promoted)
     meta["gate_verdict"] = "PROMOTE" if promoted else "DO_NOT_PROMOTE"
 
-    base = f"s1_xgb_v{meta['feature_schema_version']}_{meta['params_hash']}"
+    # The old scheme was `s1_xgb_v{feature_schema_version}_{hash}` — where the "v"
+    # number was the FEATURE SCHEMA, not the model. It read correctly only by
+    # coincidence: model 1 happened to use schema 1 and model 2 schema 2. Model 3 uses
+    # schema 2, so it would have been named "s1_xgb_v2_..." too — a second file
+    # claiming to be v2, and (since params_for_hash omitted the corpus) potentially
+    # the SAME name, silently overwriting the model in production.
+    #
+    # Both numbers now appear, each labelled. Existing v1/v2 artifacts keep their old
+    # names: `.env`'s ML_MODEL_PATH points the live server at one, and nothing in the
+    # load path parses a stem for meaning (`inference._model_id_for` strips the
+    # suffix; `_metadata_path_for` derives the sidecar from whatever stem exists), so
+    # the two conventions coexist without ambiguity.
+    base = (
+        f"s1_model_v{meta['model_version']}"
+        f"_schema{meta['feature_schema_version']}"
+        f"_{meta['params_hash']}"
+    )
     stem = base if promoted else f"{base}.{_NOT_PROMOTED_MARKER}"
 
     model_path = models_dir / f"{stem}.joblib"
@@ -139,6 +185,9 @@ def _build_metadata(
     n_trees: int,
     threshold: float,
     shap_imp: ShapImportances,
+    *,
+    version: int,
+    provenance: GitProvenance,
 ) -> dict:
     # Lazy: the ONLY thing this module wants from `shap` is its version string for
     # provenance. Kept out of module scope so importing `ml.artifact` (e.g. from a
@@ -160,13 +209,26 @@ def _build_metadata(
         feat: list(cats) for feat, cats in zip(CATEGORICAL_FEATURES, ohe.categories_)
     }
     st = dataset.frame["signal_time"]
+    fingerprint = dataset.fingerprint()
     params_for_hash = {
         "label_threshold_r": float(dataset.label_threshold_r),
         "feature_keys_model": list(FEATURE_KEYS_MODEL),
         "feature_schema_version": int(dataset.feature_schema_version),
         "hyperparameters": hyperparams,
         "best_iteration": int(n_trees),
+        # The model version, so two models cannot collide by policy...
+        "model_version": int(version),
+        # ...and the corpus digest, so they cannot collide by accident either. Before
+        # this, the only hashed field that varied with the training data was
+        # `best_iteration` — a tree count. Two models trained on entirely different
+        # corpora that happened to early-stop at the same iteration produced the same
+        # identity, and saving the second overwrote the first.
+        "dataset_fingerprint": fingerprint,
     }
+    # git_commit is deliberately ABSENT from the hash. Including it would change a
+    # model's identity for a docs-only commit, and would destroy the property that
+    # makes the hash useful: same recipe + same data ⇒ same name, which is exactly how
+    # you verify that a retrain reproduced. Provenance is RECORDED, not hashed.
     params_hash = hashlib.sha1(
         json.dumps(params_for_hash, sort_keys=True).encode("utf-8")
     ).hexdigest()[:12]
@@ -174,6 +236,11 @@ def _build_metadata(
     return {
         "model_type": "xgboost.XGBClassifier (sklearn Pipeline: encoder+model)",
         "created_at": datetime.now(timezone.utc).isoformat(),
+        "model_version": int(version),
+        "dataset_fingerprint": fingerprint,
+        "dataset_rows": len(dataset),
+        "git_commit": provenance.commit,
+        "git_dirty": provenance.dirty,
         "feature_schema_version": int(dataset.feature_schema_version),
         "feature_keys_model": list(FEATURE_KEYS_MODEL),
         "categorical_features": list(CATEGORICAL_FEATURES),
@@ -276,5 +343,15 @@ scikit-learn {m['versions']['scikit_learn']}, shap {m['versions']['shap']}.
 
 ## Reproducibility
 params_hash: `{m['params_hash']}` (sha1 of label rule + feature list + schema +
-hyperparameters + best_iteration).
+hyperparameters + best_iteration + model_version + dataset_fingerprint).
+
+Same recipe over the same data ⇒ same hash, so a retrain that reproduces this model
+lands on this filename. `dataset_fingerprint` covers the actual feature VALUES, not
+just row ids — a leakage fix changes stored values under unchanged feature names, and
+this is what makes that visible.
+
+Built from `{m.get('git_commit') or 'commit not recorded'}`\
+{' — WITH UNCOMMITTED CHANGES, so the commit does not fully describe what ran'
+ if m.get('git_dirty') else ''}. Provenance is recorded but deliberately NOT hashed:
+a docs-only commit must not change a model's identity.
 """
