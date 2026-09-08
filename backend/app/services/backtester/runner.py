@@ -207,6 +207,7 @@ def run_backtest(
     db: Session,
     settings: Settings,
     instruments: Optional[list[str]] = None,
+    strategy_id: Optional[int] = None,
 ) -> BacktestResult:
     """Run the full M7 walk-forward backtest and persist the results.
 
@@ -356,6 +357,11 @@ def run_backtest(
                 rr_actual=exit_res.rr_actual,
                 signal_source=_SIGNAL_SOURCE,
                 stage=_STAGE,
+                # WHICH CONFIGURATION produced this row. `signal_source` names the
+                # ENGINE only, so two exit variants of one engine are otherwise
+                # indistinguishable — and `load_dataset` would train on both at once,
+                # learning from two contradictory definitions of a win.
+                strategy_id=strategy_id,
                 outcome=outcome,
                 exit_reason=exit_res.exit_reason,
                 ambiguous_resolution=exit_res.ambiguous_resolution,

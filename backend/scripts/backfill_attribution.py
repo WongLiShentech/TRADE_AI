@@ -47,6 +47,7 @@ import argparse
 import hashlib
 import json
 import logging
+from datetime import datetime
 import math
 import sys
 import time
@@ -174,10 +175,27 @@ def step_register(db, dry_run: bool) -> Optional[Strategy]:
     return strategy
 
 
+# Rows opened at or after this instant are attributed BY THE WRITER, not by this
+# backfill. Anything still NULL after it indicates a writer that forgot to stamp —
+# which should be fixed at the writer, never papered over here.
+_ATTRIBUTION_CUTOFF = datetime(2026, 9, 8)
+
+
 # ── step 2 ───────────────────────────────────────────────────────────────────
 def step_attribute(db, strategy: Strategy, dry_run: bool) -> int:
-    """Point every unattributed trade at the strategy that produced it."""
-    q = db.query(Trade).filter(Trade.strategy_id.is_(None))
+    """Point every unattributed trade at the strategy that produced it.
+
+    Bounded by ``opened_at`` on purpose. This step was written when exactly one
+    strategy existed, so "unattributed" and "strategy 1" meant the same thing.
+    They no longer do: the backtest runner now stamps ``strategy_id`` as it writes,
+    and any row this step still finds NULL is either historical or a bug. Claiming
+    every NULL row for strategy 1 would silently mislabel a second strategy's
+    corpus — the exact failure this attribution layer exists to prevent.
+    """
+    q = db.query(Trade).filter(
+        Trade.strategy_id.is_(None),
+        Trade.opened_at < _ATTRIBUTION_CUTOFF,
+    )
     n = q.count()
     logger.info("  %d unattributed trades -> strategy id=%s", n, strategy.id)
     if dry_run or n == 0:

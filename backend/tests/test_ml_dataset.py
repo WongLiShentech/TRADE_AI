@@ -20,6 +20,7 @@ from app.services.ml.dataset import (
     NUMERIC_FEATURES,
     _CAT_MISSING,
     _extract_feature_row,
+    load_dataset,
     _to_number,
     to_records,
 )
@@ -112,3 +113,80 @@ def test_to_records_shape_and_nan_handling():
     recs = to_records(frame)
     assert recs[0]["rr_actual"] == 1.5 and recs[0]["holding_hours"] == 10.0
     assert recs[1]["rr_actual"] is None and recs[1]["holding_hours"] is None
+
+
+# ── strategy scoping (multi-strategy corpus safety) ───────────────────────────
+class _StubQuery:
+    """Minimal stand-in for the SQLAlchemy chain load_dataset uses."""
+
+    def __init__(self, rows):
+        self._rows = rows
+        self.filters = 0
+
+    def filter(self, *_a, **_k):
+        self.filters += 1
+        return self
+
+    def order_by(self, *_a, **_k):
+        return self
+
+    def all(self):
+        return self._rows
+
+
+class _StubSession:
+    def __init__(self, rows):
+        self.q = _StubQuery(rows)
+
+    def query(self, *_a, **_k):
+        return self.q
+
+
+class _StubTrade:
+    """Only `strategy_id` matters — the mixed-corpus guard runs BEFORE features
+    are extracted, so a row that trips it never reaches feature parsing."""
+
+    def __init__(self, strategy_id):
+        self.strategy_id = strategy_id
+
+
+def test_mixed_strategy_corpus_is_refused():
+    """Two strategies in one corpus is a CORRUPT corpus, not a bigger one.
+
+    The label is ``rr_actual >= threshold`` and rr_actual depends on the exit rule,
+    so rows from a trailing-exit strategy and a pure-barrier one disagree about what
+    a win IS. Training across both silently produces a worse model that looks fine —
+    exactly the class of failure nothing downstream would ever surface.
+    """
+    db = _StubSession([_StubTrade(1), _StubTrade(2)])
+    with pytest.raises(RuntimeError, match="mixes strategy_id"):
+        load_dataset(db, 1.0)
+
+
+def test_unattributed_rows_count_as_their_own_strategy():
+    """A NULL strategy_id is not a wildcard — it is an unknown, and mixing an
+    unknown with a known is exactly as unsafe as mixing two knowns."""
+    db = _StubSession([_StubTrade(1), _StubTrade(None)])
+    with pytest.raises(RuntimeError, match="mixes strategy_id"):
+        load_dataset(db, 1.0)
+
+
+def test_single_strategy_corpus_passes_the_guard():
+    """The guard must not fire on the single-strategy case — that is every run
+    this project has made to date, and breaking it would break M7/S1."""
+    db = _StubSession([_StubTrade(1), _StubTrade(1)])
+    # Passes the guard, then fails later on absent feature data. Reaching ANY
+    # non-guard error proves the guard let it through.
+    with pytest.raises(Exception) as exc:
+        load_dataset(db, 1.0)
+    assert "mixes strategy_id" not in str(exc.value)
+
+
+def test_explicit_strategy_id_adds_a_filter_and_skips_the_guard():
+    """Naming a strategy is the escape hatch: it scopes the query, so a corpus
+    holding several strategies is fine as long as you say which one you mean."""
+    db = _StubSession([_StubTrade(1), _StubTrade(2)])
+    with pytest.raises(Exception) as exc:
+        load_dataset(db, 1.0, strategy_id=1)
+    assert "mixes strategy_id" not in str(exc.value)
+    assert db.q.filters == 2  # stage filter + strategy filter

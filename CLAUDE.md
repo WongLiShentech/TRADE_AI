@@ -417,7 +417,8 @@ app/services/
 ├── shadow/                  ← M8-Shadow: recorder.py (live decisions), resolver.py (outcome resolution
 │                              + excursion persistence — Phase A)
 │                              (deploy: DEPLOYMENT.md; seed: scripts/export_slim_seed.py;
-│                               optional Pi retention: scripts/prune_m1_candles.py — NEVER on dev)
+│                               optional Pi retention: scripts/prune_m1_candles.py — NEVER on dev;
+                               model registry backfill: scripts/backfill_models.py)
 └── alerts/                  ← ABC + log (default) + email + telegram (both stubs)
 ```
 
@@ -436,6 +437,20 @@ model_decisions   ← one model's verdict per signal, MANY rows per trade. `trad
                     champion's — making "where they disagreed, who was right?"
                     unanswerable, which is exactly what promotion depends on.
                     `is_authoritative` marks the verdict that actually governed the row.
+models            ← registry of trained artifacts. A model is a FILE; the DB referred
+                    to it only by a bare string, so nothing recorded what that string
+                    MEANT. `strategy_id` is the load-bearing column: labels derive from
+                    `rr_actual`, and `rr_actual` depends on the EXIT RULE — relabelling
+                    one corpus under a pure-barrier exit instead of a trailing one flips
+                    12.5% of the training set. A model is valid ONLY for the strategy
+                    whose outcomes taught it; this makes that pairing checkable.
+                    `passed_gate` is nullable: v1 predates the gate, and "unknown" beats
+                    inventing a verdict. Hyperparameters/SHAP/feature lists stay in the
+                    artifact's `.metadata.json` — this table answers "what have we got?",
+                    not "how exactly was it built?".
+strategies.description ← WHAT a strategy IS (stable; changes only with `params_hash`),
+                    split from `notes` (WHAT HAPPENED to it; ever-growing). One column
+                    carrying both stops being readable once a second strategy exists.
 trade_paths       ← per-bar excursion in R. `rr_actual` alone cannot distinguish a trade
                     that peaked at +0.84R from one that never moved. Rows past the exit
                     are tagged `beyond_exit` and excluded from mfe_r/mae_r.

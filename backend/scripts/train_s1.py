@@ -18,6 +18,7 @@ Read-only against the DB (no rows written). Deterministic given ``ML_SEED``.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -39,6 +40,9 @@ from app.services.ml.evaluate import (
 )
 
 _OUTPUT_DIR = BACKEND_ROOT.parent / "output"
+# Which strategy's corpus to train on. Overridable so a second strategy can be
+# trained without editing the script; the default preserves M7/S1 behaviour.
+_STRATEGY_ID = int(os.environ["S1_STRATEGY_ID"]) if os.environ.get("S1_STRATEGY_ID") else None
 _MODELS_DIR = BACKEND_ROOT / "models"
 
 
@@ -136,7 +140,7 @@ def main() -> None:
     settings = get_settings()
     db = SessionLocal()
     try:
-        dataset = load_dataset(db, settings.ML_LABEL_THRESHOLD_R)
+        dataset = load_dataset(db, settings.ML_LABEL_THRESHOLD_R, strategy_id=_STRATEGY_ID)
         n_pos = int(dataset.y.sum())
         print(f"[train_s1] corpus={len(dataset)} rows  positives(>= "
               f"{settings.ML_LABEL_THRESHOLD_R}R)={n_pos} ({n_pos/len(dataset):.1%})", flush=True)
@@ -162,7 +166,13 @@ def main() -> None:
         print(f"SHAP dead features: {candidate.shap.dead_features or '(none)'}", flush=True)
 
         _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-        log_path = _OUTPUT_DIR / "s1_experiment_log.json"
+        # Strategy-scoped so training a second strategy cannot silently destroy the
+        # first one's run record — the two are not versions of one result, they
+        # describe different corpora and both stay relevant.
+        log_path = _OUTPUT_DIR / (
+            f"s1_experiment_log_strategy{_STRATEGY_ID}.json" if _STRATEGY_ID
+            else "s1_experiment_log.json"
+        )
         log_path.write_text(
             json.dumps(_serialise_result(result, artifact_paths), indent=2, default=str),
             encoding="utf-8",

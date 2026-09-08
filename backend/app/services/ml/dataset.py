@@ -81,12 +81,18 @@ class Dataset:
         return len(self.frame)
 
 
-def load_dataset(db: Session, label_threshold_r: float) -> Dataset:
+def load_dataset(
+    db: Session,
+    label_threshold_r: float,
+    strategy_id: int | None = None,
+) -> Dataset:
     """Load and extract the ``stage='backtest'`` corpus into a :class:`Dataset`.
 
     Args:
         db: SQLAlchemy session (read-only).
         label_threshold_r: R threshold for the win label (``settings.ML_LABEL_THRESHOLD_R``).
+        strategy_id: restrict to one strategy's rows. ``None`` means "no filter", which
+            is safe only while a single strategy exists — a mixed corpus raises.
 
     Returns:
         A :class:`Dataset` ordered chronologically by ``opened_at``.
@@ -95,16 +101,31 @@ def load_dataset(db: Session, label_threshold_r: float) -> Dataset:
         RuntimeError: if the corpus is empty, or rows carry mixed feature-schema
             versions (which would mean an inconsistent feature contract).
     """
-    trades = (
-        db.query(Trade)
-        .filter(Trade.stage == _STAGE)
-        .order_by(Trade.opened_at.asc())
-        .all()
-    )
+    q = db.query(Trade).filter(Trade.stage == _STAGE)
+    if strategy_id is not None:
+        q = q.filter(Trade.strategy_id == strategy_id)
+    trades = q.order_by(Trade.opened_at.asc()).all()
     if not trades:
         raise RuntimeError(
-            f"no trades with stage='{_STAGE}' — run the M7 backtest before training S1"
+            f"no trades with stage='{_STAGE}'"
+            + (f" and strategy_id={strategy_id}" if strategy_id is not None else "")
+            + " — run the M7 backtest before training S1"
         )
+
+    # A corpus spanning two strategies is NOT a bigger corpus, it is a corrupt one.
+    # The label is `rr_actual >= threshold`, and rr_actual depends on the EXIT RULE:
+    # relabelling one entry set under a pure-barrier exit instead of a trailing one
+    # flips 12.5% of the rows. Training across both teaches the model two
+    # contradictory definitions of a win, and nothing downstream would ever surface
+    # it — the run simply produces a worse model that looks fine. Fail loudly.
+    if strategy_id is None:
+        present = {tr.strategy_id for tr in trades}
+        if len(present) > 1:
+            raise RuntimeError(
+                f"corpus mixes strategy_id={sorted(present, key=lambda v: (v is None, v))} — "
+                f"pass strategy_id= to pick one. Labels derive from rr_actual, which "
+                f"depends on the exit rule, so these rows disagree about what a win is."
+            )
 
     rows: list[dict] = []
     schema_versions: set[int] = set()
