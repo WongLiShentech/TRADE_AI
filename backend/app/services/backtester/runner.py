@@ -39,7 +39,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Optional, Sequence
 
-from sqlalchemy import func, text
+from sqlalchemy import func, text, update
 from sqlalchemy.orm import Session
 
 from app.brokers.router import get_broker_router
@@ -48,21 +48,31 @@ from app.domain.timeframes import get_timeframe
 from app.models.backtest_run import BacktestRun
 from app.models.candle import Candle
 from app.models.instrument import Instrument
+from app.models.strategy import Strategy
 from app.models.trade import Trade
 from app.services.backtester import metrics as M
 from app.services.backtester.simulator import simulate
 from app.services.feature_builder import FEATURE_SCHEMA_VERSION, build_features, json_safe
 from app.services.position_sizer import PositionSizer
+from app.services.provenance import git_provenance
 from app.services.signal_engine.factory import get_signal_engine
 from app.services.signal_engine.rule_based import BacktestQuote
 
 logger = logging.getLogger(__name__)
 
-_STRATEGY = "rule_based_v1"
+# NOTE: there is deliberately no `_STRATEGY = "rule_based_v1"` constant here any more.
+# It was written straight onto every BacktestRun row and into fold_breakdown, and it
+# was therefore wrong the first time a second strategy existed: run 7 executed
+# rule_based_v2_fixed and recorded rule_based_v1. The name is now resolved from the
+# `strategy_id` the run was asked to execute. `tests/test_backtest_runner.py` asserts
+# the constant does not come back.
 _SIGNAL_SOURCE = "rule_based"
 _STAGE = "backtest"
 _STOP_METHOD = "atr"
 _COMMIT_BATCH = 200
+# Ids per UPDATE when stamping run_id. 6,401 in one IN-list works, but chunking
+# keeps the parameter list bounded whatever the corpus grows to.
+_STAMP_CHUNK = 5_000
 _PROGRESS_EVERY = 5_000
 
 # Config execution-window bounds are day-granular (dates), so the first/last intraday
@@ -207,7 +217,8 @@ def run_backtest(
     db: Session,
     settings: Settings,
     instruments: Optional[list[str]] = None,
-    strategy_id: Optional[int] = None,
+    *,
+    strategy_id: int,
 ) -> BacktestResult:
     """Run the full M7 walk-forward backtest and persist the results.
 
@@ -217,15 +228,38 @@ def run_backtest(
         settings: config — every threshold/window/fold value is read from here.
         instruments: optional subset of instrument symbols; defaults to all
             ``is_active=True`` instruments.
+        strategy_id: the registered strategy this run executes. REQUIRED and
+            keyword-only. An unattributed corpus is not merely untidy: ``load_dataset``
+            treats a NULL ``strategy_id`` as its own strategy, so a single
+            unattributed run permanently trips the mixed-corpus guard and blocks
+            training until someone attributes the rows by hand.
 
     Returns:
         A :class:`BacktestResult` (also persisted as one ``BacktestRun`` row).
 
     Raises:
-        RuntimeError: if the universe is empty or Bid/Ask coverage does not span the
-            execution window (fail loud — never infer the window from min/max).
+        RuntimeError: if the universe is empty, if Bid/Ask coverage does not span the
+            execution window (fail loud — never infer the window from min/max), or if
+            ``strategy_id`` names no registered strategy.
     """
     t0 = time.monotonic()
+
+    # Resolve the strategy up front so the run fails before doing 18 minutes of work
+    # rather than at the final INSERT.
+    strategy = db.get(Strategy, strategy_id)
+    if strategy is None:
+        raise RuntimeError(
+            f"strategy_id={strategy_id} is not registered — register it before "
+            f"backtesting, so its rows are attributable from birth"
+        )
+    provenance = git_provenance()
+    logger.info(
+        "backtest: strategy id=%s name=%s | code %s%s",
+        strategy.id,
+        strategy.name,
+        (provenance.commit or "unknown")[:12],
+        " (DIRTY — uncommitted changes)" if provenance.dirty else "",
+    )
 
     trading_tf = _first_granularity(settings)
     period_hours = get_timeframe(trading_tf).period_hours
@@ -257,6 +291,13 @@ def run_backtest(
     trades_simulated = 0
     pending = 0
     week_counts: dict[str, int] = {}
+    # Ids of every row THIS run wrote, stamped with run_id once the BacktestRun row
+    # exists. The alternative — `UPDATE trades SET run_id WHERE strategy_id=… AND
+    # run_id IS NULL` — would claim every pre-existing unattributed row for this run,
+    # which is precisely the bug `_ATTRIBUTION_CUTOFF` in backfill_attribution.py
+    # exists to prevent.
+    written_ids: list[int] = []
+    written_rows: list[Trade] = []
 
     for inst in insts:
         symbol = inst.symbol
@@ -342,7 +383,7 @@ def run_backtest(
                 )
 
             outcome = label_outcome(exit_res.rr_actual)
-            db.add(Trade(
+            trade_row = Trade(
                 instrument_id=inst.id,
                 direction=signal.direction,
                 entry_price=signal.entry,
@@ -371,7 +412,9 @@ def run_backtest(
                 confluence_score=signal.confidence_score,
                 session=features.get("session"),
                 stop_method=_STOP_METHOD,
-            ))
+            )
+            db.add(trade_row)
+            written_rows.append(trade_row)
             records.append({
                 "signal_time": t_sig,
                 "rr_actual": exit_res.rr_actual,
@@ -384,10 +427,17 @@ def run_backtest(
 
             if pending >= _COMMIT_BATCH:
                 db.commit()
+                # Ids are assigned on flush; harvest them now, because after the
+                # session expires these objects a later attribute read would re-SELECT
+                # every one of them individually.
+                written_ids.extend(t.id for t in written_rows)
+                written_rows.clear()
                 pending = 0
 
     if pending:
         db.commit()
+    written_ids.extend(t.id for t in written_rows)
+    written_rows.clear()
 
     # ── fold slicing + metrics + promotion gate ───────────────────────────────
     # Sort globally by signal_time so every equity-curve metric (max_drawdown is
@@ -423,7 +473,10 @@ def run_backtest(
     ]
 
     fold_breakdown = _json_safe({
-        "strategy": _STRATEGY,
+        "strategy": strategy.name,
+        "strategy_id": strategy.id,
+        "git_commit": provenance.commit,
+        "git_dirty": provenance.dirty,
         "instruments": [i.symbol for i in insts],
         "trading_timeframe": trading_tf,
         "n_trials": n_trials,
@@ -442,7 +495,10 @@ def run_backtest(
     breakdown = M.outcome_breakdown(combined_oos)
     run = BacktestRun(
         instrument_id=insts[0].id,  # schema is single-FK; run is multi-instrument (see fold_breakdown.instruments)
-        strategy=_STRATEGY,
+        strategy=strategy.name,
+        strategy_id=strategy.id,
+        git_commit=provenance.commit,
+        git_dirty=provenance.dirty,
         in_sample_start=window_start,
         in_sample_end=windows[-1].is_end,
         oos_start=windows[0].oos_start,
@@ -469,6 +525,28 @@ def run_backtest(
     db.add(run)
     db.commit()
     db.refresh(run)
+
+    # ── stamp run_id, now that the run row exists ─────────────────────────────
+    # It cannot be set at INSERT time: trades commit in batches of _COMMIT_BATCH long
+    # before this row is built. Creating the run up front instead would mean writing
+    # placeholder values for `passed`, `win_rate`, `sharpe` and `expectancy` — all NOT
+    # NULL — and a crash mid-run would then leave a row that reads as a genuine failed
+    # backtest, is served by GET /backtester/runs, and is counted by _durable_n_trials
+    # forever. An unattributed trade is the smaller and more visible failure.
+    if written_ids:
+        for i in range(0, len(written_ids), _STAMP_CHUNK):
+            chunk = written_ids[i:i + _STAMP_CHUNK]
+            db.execute(update(Trade).where(Trade.id.in_(chunk)).values(run_id=run.id))
+        db.commit()
+        logger.info("backtest: stamped run_id=%s on %d trades", run.id, len(written_ids))
+    if len(written_ids) != trades_simulated:
+        # Not fatal — the rows are written and attributed by strategy_id — but it means
+        # some row escaped id harvesting, so say so rather than let the count drift
+        # silently.
+        logger.error(
+            "backtest: stamped %d run_ids but simulated %d trades — some rows are "
+            "unattributed to this run", len(written_ids), trades_simulated,
+        )
 
     runtime = time.monotonic() - t0
     logger.info(

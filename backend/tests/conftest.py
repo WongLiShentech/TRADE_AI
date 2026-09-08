@@ -34,6 +34,7 @@ from urllib.parse import urlparse
 
 import pytest
 from dotenv import dotenv_values
+from sqlalchemy import text
 
 from app.config import get_settings
 from app.database import SessionLocal
@@ -132,6 +133,28 @@ def db():
 @pytest.fixture()
 def settings():
     return get_settings()
+
+
+@pytest.fixture()
+def corpus_strategy_id(db) -> int:
+    """The strategy owning the largest attributed backtest corpus on THIS database.
+
+    Tests that load the real corpus must name a strategy — an unscoped load raises
+    once two strategies exist. Hardcoding ``1`` would bind the suite to a database id
+    that differs between a dev machine and a restored server dump, so it is discovered
+    instead. Skips rather than fails when nothing is attributed: that is a database
+    that has not been backfilled, not a broken assertion.
+    """
+    row = db.execute(
+        text(
+            "SELECT strategy_id FROM trades "
+            "WHERE stage = 'backtest' AND strategy_id IS NOT NULL "
+            "GROUP BY strategy_id ORDER BY count(*) DESC LIMIT 1"
+        )
+    ).first()
+    if row is None:
+        pytest.skip("no attributed backtest corpus on this database")
+    return int(row[0])
 
 
 @pytest.fixture()

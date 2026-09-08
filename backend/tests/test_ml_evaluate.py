@@ -117,8 +117,10 @@ def test_keep_fraction_report_surfaces_per_fold_fractions():
 
 
 # ── end-to-end on the live corpus (trains the three fold models) ──────────────
-def test_walk_forward_end_to_end_invariants(db, settings):
-    dataset = load_dataset(db, settings.ML_LABEL_THRESHOLD_R)
+def test_walk_forward_end_to_end_invariants(db, settings, corpus_strategy_id):
+    # Scoped to one strategy: an unscoped load raises once a second strategy's rows
+    # exist, and evaluating across two exit rules would mix contradictory labels.
+    dataset = load_dataset(db, settings.ML_LABEL_THRESHOLD_R, strategy_id=corpus_strategy_id)
     result = evaluate_walk_forward(db, settings, n_trials=1, dataset=dataset)
 
     assert len(result.folds) == 3

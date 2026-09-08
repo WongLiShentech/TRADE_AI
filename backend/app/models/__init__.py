@@ -8,6 +8,7 @@ from app.models.trade import Trade
 from app.models.trade_path import TradePath
 from app.models.model_decision import ModelDecision
 from app.models.ml_model import MLModel
+from app.models.training_dataset import TrainingDataset
 from app.models.backtest_run import BacktestRun
 from app.models.equity_point import EquityPoint
 from app.models.bot_state import BotState
@@ -25,6 +26,7 @@ __all__ = [
     "TradePath",
     "ModelDecision",
     "MLModel",
+    "TrainingDataset",
     "BacktestRun",
     "EquityPoint",
     "BotState",

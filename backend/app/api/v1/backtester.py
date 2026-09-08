@@ -96,18 +96,25 @@ class TradeRow(BaseModel):
 
 
 class RunRequest(BaseModel):
+    # REQUIRED. A run with no strategy writes rows with a NULL strategy_id, and
+    # `load_dataset` treats NULL as its own strategy — so one API-triggered run
+    # permanently trips the mixed-corpus guard and blocks training until somebody
+    # attributes those rows by hand. Making the caller name the strategy is the whole
+    # cost of never having that happen.
+    strategy_id: int
     instruments: list[str] | None = None
 
 
 # ── endpoints ────────────────────────────────────────────────────────────────
 @router.post("/run", response_model=RunResult, status_code=201)
 def run(
-    request: RunRequest | None = None,
+    request: RunRequest,
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ):
-    instruments = request.instruments if request else None
-    result = run_backtest(db, settings, instruments)
+    result = run_backtest(
+        db, settings, request.instruments, strategy_id=request.strategy_id
+    )
     run_row = db.query(BacktestRun).get(result.run_id)
     return RunResult(
         run_id=result.run_id,

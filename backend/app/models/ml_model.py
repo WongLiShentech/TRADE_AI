@@ -1,6 +1,16 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, func
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    func,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -51,10 +61,29 @@ class MLModel(Base):
     __table_args__ = (
         Index("ix_models_strategy_id", "strategy_id"),
         Index("ix_models_status", "status"),
+        # Without this, two rows can both claim "version 2 of strategy 1" and the
+        # version number means nothing. Partial, because a model whose version was
+        # never assigned is recorded as NULL rather than forced into the sequence.
+        Index(
+            "uq_models_strategy_version",
+            "strategy_id",
+            "version",
+            unique=True,
+            postgresql_where=text("version IS NOT NULL"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    # The FULL artifact stem, `.NOT_PROMOTED` included where present — the same string
+    # `inference._model_id_for` produces and the recorder writes to
+    # `trades.ml_model_id`. Stripping the marker breaks the join to every decision
+    # this row describes.
     model_id: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    # Sequential model version — 1, 2, 3 — and NOT the feature schema version, which
+    # the old `s1_xgb_v2_...` filenames actually encoded. They coincided by accident
+    # (model 1 used schema 1, model 2 used schema 2) and would have diverged at
+    # model 3, which uses schema 2. Assigned by a human, enforced unique per strategy.
+    version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     strategy_id: Mapped[int | None] = mapped_column(
         Integer, ForeignKey("strategies.id"), nullable=True
     )
@@ -65,6 +94,27 @@ class MLModel(Base):
     decision_threshold: Mapped[float | None] = mapped_column(Float, nullable=True)
     passed_gate: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     status: Mapped[str] = mapped_column(String, nullable=False)
+
+    # ── provenance: which data, which code ────────────────────────────────────
+    # The exact corpus, by content rather than by query. `trained_on_stages` and
+    # `strategy_id` say what was ASKED for; this says what was RECEIVED.
+    dataset_id: Mapped[int | None] = mapped_column(
+        ForeignKey("datasets.id"), nullable=True, index=True
+    )
+    # NULL means "not recorded", which is the honest value for v1 and v2 — both were
+    # trained before provenance capture existed and it cannot be reconstructed.
+    git_commit: Mapped[str | None] = mapped_column(String, nullable=True)
+    git_dirty: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+
+    # ── multiple-testing correction ───────────────────────────────────────────
+    # The trial count this model's results were discounted by (deflated Sharpe).
+    n_trials: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # WHERE that number came from. Mandatory context, not decoration: the counter is
+    # currently derived from `backtest_runs_id_seq` GLOBALLY, so it differs by host
+    # (local reads 7, the server reads 1) and counts looks at other strategies' data.
+    # A bare integer would be uninterpretable six months from now.
+    n_trials_source: Mapped[str | None] = mapped_column(String, nullable=True)
+
     description: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now()

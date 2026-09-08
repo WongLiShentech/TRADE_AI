@@ -34,7 +34,7 @@ from app.config import Settings
 from app.domain.timeframes import get_timeframe
 from app.services.backtester import metrics as M
 from app.services.backtester.runner import fold_windows, slice_folds
-from app.services.ml.dataset import Dataset, load_dataset, to_records
+from app.services.ml.dataset import Dataset, to_records
 from app.services.ml.model import build_model, fit_with_early_stopping
 from app.services.ml.pipeline import build_encoder
 from app.services.ml.policy import ThresholdChoice, select_threshold
@@ -81,24 +81,26 @@ def evaluate_walk_forward(
     db: Session,
     settings: Settings,
     n_trials: int,
-    dataset: Dataset | None = None,
+    dataset: Dataset,
 ) -> WalkForwardResult:
     """Run the full S1 walk-forward evaluation.
 
     Args:
-        db: SQLAlchemy session (reads the corpus; no writes).
+        db: SQLAlchemy session (reads only; no writes).
         settings: config — fold geometry, hyperparameters, gate thresholds.
         n_trials: honest independent-backtest count for the deflated-Sharpe
             selection-bias correction (from the durable counter).
-        dataset: optionally a pre-loaded :class:`Dataset` (else loaded here).
+        dataset: the corpus to evaluate. REQUIRED — this previously defaulted to
+            ``load_dataset(db, threshold)`` with no strategy, which was harmless while
+            one strategy existed and is now a trap: an unscoped load raises on a mixed
+            corpus, so the convenience default would fail exactly when someone relied
+            on it. Deleting the default beats parameterising it — the caller already
+            knows which strategy it means, and being forced to say so is the point.
 
     Returns:
         A :class:`WalkForwardResult` with per-fold + combined metrics and both the
         ML-filtered and unfiltered-baseline promotion-gate verdicts.
     """
-    if dataset is None:
-        dataset = load_dataset(db, settings.ML_LABEL_THRESHOLD_R)
-
     windows = _build_windows(settings)
     # Slice by signal_time, carrying each trade's row index so we can subset the frame.
     records = [

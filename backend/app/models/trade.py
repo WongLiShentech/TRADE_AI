@@ -71,6 +71,22 @@ class Trade(Base):
     strategy_id: Mapped[int | None] = mapped_column(
         ForeignKey("strategies.id"), nullable=True, index=True
     )
+    # WHICH EXECUTION produced this row. `strategy_id` says which configuration; two
+    # backtests of that same configuration — before and after a simulator bug fix,
+    # say — are otherwise indistinguishable and silently merge into one pile. Without
+    # it a re-run must DELETE the previous corpus to stay unambiguous, which destroys
+    # the comparison the re-run was for.
+    #
+    # NULL for the pre-lineage corpus, permanently. `trades` has no creation
+    # timestamp and the runs that produced those rows were deleted, so the parent is
+    # unrecoverable. A synthetic placeholder run was rejected: it would have to
+    # fabricate `passed` (a promotion verdict nobody reached) and, decisively, would
+    # consume a `backtest_runs_id_seq` value — permanently changing `_durable_n_trials`
+    # and therefore the deflated Sharpe applied to every future run. A bookkeeping
+    # choice must not move a statistical result.
+    run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("backtest_runs.id"), nullable=True, index=True
+    )
 
     # ── Excursion extremes (Phase A) ─────────────────────────────────────────
     # The best and worst this trade ever looked, in R, from the intrabar walk the
