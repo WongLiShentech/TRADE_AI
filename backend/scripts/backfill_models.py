@@ -70,6 +70,27 @@ CURATION = {
             "only; the .NOT_PROMOTED filename is enforced at load time."
         ),
     },
+    "s1_model_v3_schema2_06fb46aca05f": {
+        "strategy_name": "rule_based_v2_fixed",
+        "version": 3,
+        # `candidate`, not `champion`: it PASSED the walk-forward gate, but has never
+        # scored a live bar. Passing the gate means "no longer disqualified", not
+        # "proven" — the gate is measured on a backtest that has now been examined
+        # eight times, and forward evidence is the only kind that cannot be fished.
+        "status": "candidate",
+        "n_trials": 8,
+        "n_trials_source": "backtest_runs_id_seq (global, local host) @ 2026-09-09",
+        "description": (
+            "First model to pass the promotion gate. Trained on the pure-barrier "
+            "corpus (strategy rule_based_v2_fixed): 6,401 trades, 19 features, "
+            "schema v2. Combined OOS PF 1.977, expectancy +0.342R, max drawdown "
+            "15.0% across three folds, all criteria passing with margin. Its "
+            "predecessor v2 failed fold-1 expectancy by 0.003 on the trailing-exit "
+            "corpus; removing the partial and trailing stop raised the win base rate "
+            "from 18.8% to 28.8%, which is what the model actually learned from. "
+            "Not deployed: unevaluated on live bars."
+        ),
+    },
 }
 
 # git provenance is NOT curated for v1/v2. Both were trained before it was captured,

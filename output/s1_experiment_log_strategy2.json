@@ -1,0 +1,408 @@
+{
+  "created_at": "2026-09-08T20:14:29.921584+00:00",
+  "n_trials": 8,
+  "label_threshold_r": 1.0,
+  "ml_passed": true,
+  "baseline_passed": false,
+  "ml_combined_metrics": {
+    "trade_count": 1441,
+    "profit_factor": 1.9766088256799708,
+    "expectancy": 0.34223065996126334,
+    "max_drawdown": 0.1495034250497563,
+    "sharpe": 0.2948499652449721,
+    "deflated_sharpe": 1.0,
+    "probabilistic_sharpe": 1.0,
+    "win_rate": 0.5614156835530881,
+    "avg_holding_hours": 37.2138212275426,
+    "outcome_breakdown": {
+      "full_win": 304,
+      "partial": 505,
+      "breakeven": 27,
+      "loss": 605
+    }
+  },
+  "baseline_combined_metrics": {
+    "trade_count": 4268,
+    "profit_factor": 1.4694527169544553,
+    "expectancy": 0.19724085707505734,
+    "max_drawdown": 0.326895049071118,
+    "sharpe": 0.1682334786905707,
+    "deflated_sharpe": 1.0,
+    "probabilistic_sharpe": 1.0,
+    "win_rate": 0.49812558575445176,
+    "avg_holding_hours": 35.10084296573987,
+    "outcome_breakdown": {
+      "full_win": 817,
+      "partial": 1309,
+      "breakeven": 78,
+      "loss": 2064
+    }
+  },
+  "ml_gate_detail": {
+    "folds": [
+      {
+        "profit_factor": 1.9471584416276797,
+        "expectancy": 0.3358311542260945,
+        "max_drawdown": 0.10771025499569127,
+        "oos_sample_size": 601,
+        "deflated_sharpe": 0.999999995120461,
+        "profit_factor_pass": true,
+        "expectancy_pass": true,
+        "max_drawdown_pass": true,
+        "oos_sample_size_pass": true,
+        "deflated_sharpe_pass": true,
+        "passed": true
+      },
+      {
+        "profit_factor": 1.894351770088785,
+        "expectancy": 0.3167862828956927,
+        "max_drawdown": 0.1495034250497569,
+        "oos_sample_size": 647,
+        "deflated_sharpe": 0.9999999938318647,
+        "profit_factor_pass": true,
+        "expectancy_pass": true,
+        "max_drawdown_pass": true,
+        "oos_sample_size_pass": true,
+        "deflated_sharpe_pass": true,
+        "passed": true
+      },
+      {
+        "profit_factor": 2.377361343480968,
+        "expectancy": 0.44745664394188833,
+        "max_drawdown": 0.08084436884050436,
+        "oos_sample_size": 193,
+        "deflated_sharpe": 0.9998968049438774,
+        "profit_factor_pass": true,
+        "expectancy_pass": true,
+        "max_drawdown_pass": true,
+        "oos_sample_size_pass": true,
+        "deflated_sharpe_pass": true,
+        "passed": true
+      }
+    ],
+    "combined": {
+      "oos_sample_size": 1441,
+      "deflated_sharpe": 1.0,
+      "deflated_sharpe_positive": true
+    }
+  },
+  "baseline_gate_detail": {
+    "folds": [
+      {
+        "profit_factor": 1.5368811237427806,
+        "expectancy": 0.22478684282432723,
+        "max_drawdown": 0.326895049071118,
+        "oos_sample_size": 2163,
+        "deflated_sharpe": 0.9999999999999754,
+        "profit_factor_pass": true,
+        "expectancy_pass": true,
+        "max_drawdown_pass": false,
+        "oos_sample_size_pass": true,
+        "deflated_sharpe_pass": true,
+        "passed": false
+      },
+      {
+        "profit_factor": 1.4676993660658888,
+        "expectancy": 0.19337828106236962,
+        "max_drawdown": 0.21390631002266428,
+        "oos_sample_size": 1321,
+        "deflated_sharpe": 0.9999990406659987,
+        "profit_factor_pass": true,
+        "expectancy_pass": true,
+        "max_drawdown_pass": true,
+        "oos_sample_size_pass": true,
+        "deflated_sharpe_pass": true,
+        "passed": true
+      },
+      {
+        "profit_factor": 1.2933843058088106,
+        "expectancy": 0.12775169347440646,
+        "max_drawdown": 0.19888629694533888,
+        "oos_sample_size": 784,
+        "deflated_sharpe": 0.9567741141977417,
+        "profit_factor_pass": false,
+        "expectancy_pass": false,
+        "max_drawdown_pass": true,
+        "oos_sample_size_pass": true,
+        "deflated_sharpe_pass": true,
+        "passed": false
+      }
+    ],
+    "combined": {
+      "oos_sample_size": 4268,
+      "deflated_sharpe": 1.0,
+      "deflated_sharpe_positive": true
+    }
+  },
+  "folds": [
+    {
+      "fold": 1,
+      "window": {
+        "is_start": "2021-06-01T00:00:00",
+        "is_end": "2023-01-30T17:22:33.600000",
+        "oos_start": "2023-02-02T01:22:33.600000",
+        "oos_end": "2024-10-02T06:37:26.400000"
+      },
+      "is_trade_count": 2108,
+      "oos_trade_count": 2163,
+      "train_count": 1686,
+      "val_count": 422,
+      "val_auc": 0.5100820232399179,
+      "threshold": 0.3203945755958557,
+      "kept": 601,
+      "keep_fraction": 0.2778548312528895,
+      "val_expectancy": 0.3284899598119082,
+      "ml_filtered_metrics": {
+        "trade_count": 601,
+        "profit_factor": 1.9471584416276797,
+        "expectancy": 0.3358311542260945,
+        "max_drawdown": 0.10771025499569127,
+        "sharpe": 0.28828516253867653,
+        "deflated_sharpe": 0.999999995120461,
+        "probabilistic_sharpe": 0.9999999999997555,
+        "win_rate": 0.5557404326123128,
+        "avg_holding_hours": 36.53521861711962,
+        "outcome_breakdown": {
+          "full_win": 128,
+          "partial": 206,
+          "breakeven": 13,
+          "loss": 254
+        }
+      },
+      "baseline_metrics": {
+        "trade_count": 2163,
+        "profit_factor": 1.5368811237427806,
+        "expectancy": 0.22478684282432723,
+        "max_drawdown": 0.326895049071118,
+        "sharpe": 0.18835800123904836,
+        "deflated_sharpe": 0.9999999999999754,
+        "probabilistic_sharpe": 1.0,
+        "win_rate": 0.5002311604253352,
+        "avg_holding_hours": 34.35881453228541,
+        "outcome_breakdown": {
+          "full_win": 449,
+          "partial": 633,
+          "breakeven": 41,
+          "loss": 1040
+        }
+      },
+      "ml_gate": {
+        "profit_factor": 1.9471584416276797,
+        "expectancy": 0.3358311542260945,
+        "max_drawdown": 0.10771025499569127,
+        "oos_sample_size": 601,
+        "deflated_sharpe": 0.999999995120461,
+        "profit_factor_pass": true,
+        "expectancy_pass": true,
+        "max_drawdown_pass": true,
+        "oos_sample_size_pass": true,
+        "deflated_sharpe_pass": true,
+        "passed": true
+      },
+      "baseline_gate": {
+        "profit_factor": 1.5368811237427806,
+        "expectancy": 0.22478684282432723,
+        "max_drawdown": 0.326895049071118,
+        "oos_sample_size": 2163,
+        "deflated_sharpe": 0.9999999999999754,
+        "profit_factor_pass": true,
+        "expectancy_pass": true,
+        "max_drawdown_pass": false,
+        "oos_sample_size_pass": true,
+        "deflated_sharpe_pass": true,
+        "passed": false
+      },
+      "degenerate_reason": null
+    },
+    {
+      "fold": 2,
+      "window": {
+        "is_start": "2021-06-01T00:00:00",
+        "is_end": "2024-10-02T06:37:26.400000",
+        "oos_start": "2024-10-04T14:37:26.400000",
+        "oos_end": "2025-10-17T12:00:00"
+      },
+      "is_trade_count": 4282,
+      "oos_trade_count": 1321,
+      "train_count": 3426,
+      "val_count": 856,
+      "val_auc": 0.633573793755913,
+      "threshold": 0.36942678689956665,
+      "kept": 647,
+      "keep_fraction": 0.489780469341408,
+      "val_expectancy": 0.5555094104430823,
+      "ml_filtered_metrics": {
+        "trade_count": 647,
+        "profit_factor": 1.894351770088785,
+        "expectancy": 0.3167862828956927,
+        "max_drawdown": 0.1495034250497569,
+        "sharpe": 0.27671341967267127,
+        "deflated_sharpe": 0.9999999938318647,
+        "probabilistic_sharpe": 0.9999999999996656,
+        "win_rate": 0.5564142194744977,
+        "avg_holding_hours": 37.568939120728146,
+        "outcome_breakdown": {
+          "full_win": 126,
+          "partial": 234,
+          "breakeven": 8,
+          "loss": 279
+        }
+      },
+      "baseline_metrics": {
+        "trade_count": 1321,
+        "profit_factor": 1.4676993660658888,
+        "expectancy": 0.19337828106236962,
+        "max_drawdown": 0.21390631002266428,
+        "sharpe": 0.16748574571155722,
+        "deflated_sharpe": 0.9999990406659987,
+        "probabilistic_sharpe": 0.9999999998119529,
+        "win_rate": 0.5049205147615443,
+        "avg_holding_hours": 35.495167591891665,
+        "outcome_breakdown": {
+          "full_win": 238,
+          "partial": 429,
+          "breakeven": 19,
+          "loss": 635
+        }
+      },
+      "ml_gate": {
+        "profit_factor": 1.894351770088785,
+        "expectancy": 0.3167862828956927,
+        "max_drawdown": 0.1495034250497569,
+        "oos_sample_size": 647,
+        "deflated_sharpe": 0.9999999938318647,
+        "profit_factor_pass": true,
+        "expectancy_pass": true,
+        "max_drawdown_pass": true,
+        "oos_sample_size_pass": true,
+        "deflated_sharpe_pass": true,
+        "passed": true
+      },
+      "baseline_gate": {
+        "profit_factor": 1.4676993660658888,
+        "expectancy": 0.19337828106236962,
+        "max_drawdown": 0.21390631002266428,
+        "oos_sample_size": 1321,
+        "deflated_sharpe": 0.9999990406659987,
+        "profit_factor_pass": true,
+        "expectancy_pass": true,
+        "max_drawdown_pass": true,
+        "oos_sample_size_pass": true,
+        "deflated_sharpe_pass": true,
+        "passed": true
+      },
+      "degenerate_reason": null
+    },
+    {
+      "fold": 3,
+      "window": {
+        "is_start": "2021-06-01T00:00:00",
+        "is_end": "2025-10-17T12:00:00",
+        "oos_start": "2025-10-19T20:00:00",
+        "oos_end": "2026-06-03T00:00:00"
+      },
+      "is_trade_count": 5617,
+      "oos_trade_count": 784,
+      "train_count": 4494,
+      "val_count": 1123,
+      "val_auc": 0.6365866504047012,
+      "threshold": 0.37279605865478516,
+      "kept": 193,
+      "keep_fraction": 0.2461734693877551,
+      "val_expectancy": 0.6222838928191338,
+      "ml_filtered_metrics": {
+        "trade_count": 193,
+        "profit_factor": 2.377361343480968,
+        "expectancy": 0.44745664394188833,
+        "max_drawdown": 0.08084436884050436,
+        "sharpe": 0.37285428045387076,
+        "deflated_sharpe": 0.9998968049438774,
+        "probabilistic_sharpe": 0.9999998838995228,
+        "win_rate": 0.5958549222797928,
+        "avg_holding_hours": 38.136509786989066,
+        "outcome_breakdown": {
+          "full_win": 50,
+          "partial": 65,
+          "breakeven": 6,
+          "loss": 72
+        }
+      },
+      "baseline_metrics": {
+        "trade_count": 784,
+        "profit_factor": 1.2933843058088106,
+        "expectancy": 0.12775169347440646,
+        "max_drawdown": 0.19888629694533888,
+        "sharpe": 0.11187255173648972,
+        "deflated_sharpe": 0.9567741141977417,
+        "probabilistic_sharpe": 0.9993385587656817,
+        "win_rate": 0.48086734693877553,
+        "avg_holding_hours": 36.483629535147394,
+        "outcome_breakdown": {
+          "full_win": 130,
+          "partial": 247,
+          "breakeven": 18,
+          "loss": 389
+        }
+      },
+      "ml_gate": {
+        "profit_factor": 2.377361343480968,
+        "expectancy": 0.44745664394188833,
+        "max_drawdown": 0.08084436884050436,
+        "oos_sample_size": 193,
+        "deflated_sharpe": 0.9998968049438774,
+        "profit_factor_pass": true,
+        "expectancy_pass": true,
+        "max_drawdown_pass": true,
+        "oos_sample_size_pass": true,
+        "deflated_sharpe_pass": true,
+        "passed": true
+      },
+      "baseline_gate": {
+        "profit_factor": 1.2933843058088106,
+        "expectancy": 0.12775169347440646,
+        "max_drawdown": 0.19888629694533888,
+        "oos_sample_size": 784,
+        "deflated_sharpe": 0.9567741141977417,
+        "profit_factor_pass": false,
+        "expectancy_pass": false,
+        "max_drawdown_pass": true,
+        "oos_sample_size_pass": true,
+        "deflated_sharpe_pass": true,
+        "passed": false
+      },
+      "degenerate_reason": null
+    }
+  ],
+  "keep_fraction_report": [
+    {
+      "fold": 1,
+      "kept": 601,
+      "oos_total": 2163,
+      "keep_fraction": 0.2778548312528895,
+      "threshold": 0.3203945755958557,
+      "degenerate_reason": null
+    },
+    {
+      "fold": 2,
+      "kept": 647,
+      "oos_total": 1321,
+      "keep_fraction": 0.489780469341408,
+      "threshold": 0.36942678689956665,
+      "degenerate_reason": null
+    },
+    {
+      "fold": 3,
+      "kept": 193,
+      "oos_total": 784,
+      "keep_fraction": 0.2461734693877551,
+      "threshold": 0.37279605865478516,
+      "degenerate_reason": null
+    }
+  ],
+  "artifact_paths": {
+    "model": "C:\\Trade_AI\\backend\\models\\s1_model_v3_schema2_06fb46aca05f.joblib",
+    "metadata": "C:\\Trade_AI\\backend\\models\\s1_model_v3_schema2_06fb46aca05f.metadata.json",
+    "model_card": "C:\\Trade_AI\\backend\\models\\s1_model_v3_schema2_06fb46aca05f.model_card.md",
+    "promoted": true
+  }
+}

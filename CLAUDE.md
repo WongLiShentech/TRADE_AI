@@ -401,6 +401,7 @@ CORS_ORIGINS=
 app/services/
 ├── trade_classifier.py      ← classify_trade() → STRATEGY/NEWS/MANIPULATION/MANUAL/UNCERTAIN + confidence
 ├── feature_builder.py       ← build_features() → single PIT feature chokepoint (M7 + live); leakage firewall
+├── provenance.py            ← git_provenance() → commit + dirty at build time; NEVER raises into a run
 ├── session_classifier.py    ← classify_session(utc_dt) → asian/london/ny/overlap
 ├── journal_generator.py     ← generate_weekly_journal() → writes raw/TRADE_AI/journal/YYYY-WNN.md
 ├── wiki_ingestor.py         ← ingest_journal() → calls Anthropic API, writes wiki pages
@@ -413,12 +414,14 @@ app/services/
 ├── news_sentiment/          ← ABC + Finnhub + ForexNewsAPI (both stubs — Phase 1B)
 ├── fundamental/             ← ABC + FRED (macro_data pipeline) + staleness watchdog
 ├── backtester/              ← M7: simulator.py, metrics.py, runner.py (walk-forward + promotion gate)
-├── ml/                      ← S1: dataset, pipeline, model, policy, evaluate, shap_analysis, artifact, inference
+├── ml/                      ← S1: dataset, pipeline, model, policy, evaluate, shap_analysis, artifact,
+│                              inference, fingerprint (byte-stable dataset digest)
 ├── shadow/                  ← M8-Shadow: recorder.py (live decisions), resolver.py (outcome resolution
 │                              + excursion persistence — Phase A)
 │                              (deploy: DEPLOYMENT.md; seed: scripts/export_slim_seed.py;
 │                               optional Pi retention: scripts/prune_m1_candles.py — NEVER on dev;
-                               model registry backfill: scripts/backfill_models.py)
+                               model registry backfill: scripts/backfill_models.py;
+                               run/dataset lineage: scripts/backfill_lineage.py)
 └── alerts/                  ← ABC + log (default) + email + telegram (both stubs)
 ```
 
@@ -451,6 +454,27 @@ models            ← registry of trained artifacts. A model is a FILE; the DB r
 strategies.description ← WHAT a strategy IS (stable; changes only with `params_hash`),
                     split from `notes` (WHAT HAPPENED to it; ever-growing). One column
                     carrying both stops being readable once a second strategy exists.
+datasets          ← the exact corpus a model trained on: a declarative definition
+                    (stage, strategy, run) PLUS a content fingerprint proving what it
+                    resolved to. "Trained on strategy 2" names a LIVE QUERY whose rows
+                    grow and get re-graded, so two models can claim one corpus and have
+                    seen different data. UNIQUE on `fingerprint`, so a retrain over
+                    identical data REUSES the row — champion and challenger sharing a
+                    dataset becomes a fact the schema states. No membership join table:
+                    it could only report deleted rows as absent, which the fingerprint
+                    also does, while additionally catching changed feature VALUES under
+                    unchanged ids (a leakage fix is exactly this).
+trades.run_id     ← WHICH EXECUTION produced the row. `strategy_id` names the
+                    configuration; two backtests of it (before/after a simulator fix)
+                    were otherwise indistinguishable and merged into one pile, so a
+                    re-run had to DELETE the prior corpus to stay unambiguous. NULL is
+                    permitted and means "no run passed all three attribution gates" —
+                    never a placeholder run, which would fabricate NOT NULL metrics AND
+                    consume a sequence value, changing `_durable_n_trials` and thus the
+                    deflated Sharpe of every future backtest.
+backtest_runs     ← gains `strategy_id` (the `strategy` STRING was written from a module
+                    constant and was wrong the first time two strategies existed) plus
+                    `git_commit`/`git_dirty`.
 trade_paths       ← per-bar excursion in R. `rr_actual` alone cannot distinguish a trade
                     that peaked at +0.84R from one that never moved. Rows past the exit
                     are tagged `beyond_exit` and excluded from mfe_r/mae_r.
