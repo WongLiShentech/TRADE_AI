@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 
 from app.models.trade import Trade
 from app.services.feature_builder import FEATURE_KEYS_MODEL, FEATURE_SCHEMA_VERSION
+from app.services.ml.fingerprint import dataset_fingerprint
 
 # The two categorical model features (one-hot encoded); the rest are numeric and
 # pass straight through to XGBoost (NaN-native). Derived from the locked contract,
@@ -29,6 +30,16 @@ from app.services.feature_builder import FEATURE_KEYS_MODEL, FEATURE_SCHEMA_VERS
 CATEGORICAL_FEATURES: tuple[str, ...] = ("instrument_category", "session")
 NUMERIC_FEATURES: tuple[str, ...] = tuple(
     k for k in FEATURE_KEYS_MODEL if k not in CATEGORICAL_FEATURES
+)
+
+# What the content fingerprint covers: the WHOLE frame, defined by the same
+# expression that builds it (see `columns = ...` in load_dataset). Derived rather
+# than restated so the two cannot drift — a curated subset would be a standing
+# judgement call about which columns "count" as the data.
+_FINGERPRINT_COLUMNS: tuple[str, ...] = tuple(FEATURE_KEYS_MODEL) + (
+    "rr_actual",
+    "signal_time",
+    "holding_hours",
 )
 
 _STAGE = "backtest"
@@ -76,6 +87,20 @@ class Dataset:
     def signal_time(self) -> np.ndarray:
         """Signal timestamp per trade (== ``opened_at``); used for fold slicing."""
         return self.frame["signal_time"].to_numpy()
+
+    def fingerprint(self) -> str:
+        """Content digest over the exact rows and values this dataset holds.
+
+        A METHOD rather than a stored field, for two reasons: ``Dataset`` is
+        constructed in tests from hand-built frames that must stay cheap, and a
+        cached field would go stale against a mutated frame while still looking
+        authoritative. Computed on demand, it always describes the frame as it is.
+
+        Covers every model feature plus ``rr_actual``, ``signal_time`` and
+        ``holding_hours`` — the whole frame, by rule rather than by a curated list,
+        so there is no judgement call about what "counts" as the data.
+        """
+        return dataset_fingerprint(self.frame, _FINGERPRINT_COLUMNS)
 
     def __len__(self) -> int:
         return len(self.frame)
