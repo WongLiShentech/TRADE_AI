@@ -60,12 +60,16 @@ from app.models import BacktestRun, Strategy, Trade, TrainingDataset
 from app.services.feature_builder import FEATURE_KEYS_MODEL
 from app.services.ml.dataset import load_dataset
 from app.services.ml.fingerprint import feature_keys_hash
+from app.services.strategy_registry import resolve_active_strategy
 from scripts.backfill_attribution import _ENGINE, _IDENTITY_PARAMS, _params_hash
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger("lineage")
 
 _STAGE = "backtest"
+# Rows that record a live observation. Sandbox is included because a take that
+# reached a broker is still an observation of the same strategy.
+_OBSERVATION_STAGES = ("shadow", "sandbox")
 
 
 # ── step 1: which strategy did each run actually execute? ────────────────────
@@ -250,6 +254,110 @@ def step_trades(db, dry: bool, mapping: dict[int, int]) -> int:
     return changed
 
 
+# ── step 2b: the live observation rows the recorder wrote before it knew ─────
+def step_observation_rows(db, dry: bool, settings) -> int:
+    """Attribute shadow/sandbox rows written before the recorder set ``strategy_id``.
+
+    103+ such rows exist in production: the recorder had no strategy concept, so every
+    row it wrote after the one-off attribution backfill is NULL. They are gradeable but
+    unusable for training, and the count grows every four hours.
+
+    Unlike a backtest row, a shadow row does NOT record the configuration that produced
+    it — ``signal_reasoning['shadow']`` holds the model, threshold and risk verdict but
+    no strategy params. So this cannot be derived per row; it can only be argued from
+    the deployment's state, and it is therefore gated on three conditions that together
+    make the argument sound:
+
+      1. exactly ONE strategy is registered as shadow/live — no ambiguity about which
+         one was running;
+      2. the CURRENT live configuration resolves to that same strategy — so the config
+         has not changed since those rows were written, which is the only way a second
+         strategy could have produced them;
+      3. the orphan rows are contiguous with rows already attributed to it (or there
+         are none attributed yet) — no unexplained gap suggesting a different period.
+
+    Any failure leaves them NULL and prints why. Each attributed row records
+    ``signal_reasoning.shadow.strategy_attributed_by`` so the inference is visible on
+    the row itself rather than only in this docstring.
+    """
+    logger.info("[2b] attributing live observation rows")
+    orphans = db.execute(
+        select(func.count(Trade.id), func.min(Trade.opened_at), func.max(Trade.opened_at))
+        .where(Trade.stage.in_(_OBSERVATION_STAGES), Trade.strategy_id.is_(None))
+    ).one()
+    n_orphans, o_min, o_max = orphans
+    if not n_orphans:
+        logger.info("  none — every observation row is attributed")
+        return 0
+
+    # GATE 1 — one candidate only.
+    candidates = list(db.execute(
+        select(Strategy).where(Strategy.status.in_(("shadow", "live")))
+    ).scalars())
+    if len(candidates) != 1:
+        logger.warning(
+            "  %d rows unattributed, but %d strategies are shadow/live (%s) — cannot "
+            "decide which produced them; left NULL",
+            n_orphans, len(candidates), [s.name for s in candidates],
+        )
+        return 0
+    target = candidates[0]
+
+    # GATE 2 — the running config still IS that strategy.
+    live = resolve_active_strategy(db, settings, auto_register=False)
+    if live is None or live.id != target.id:
+        logger.warning(
+            "  %d rows unattributed, but the live config resolves to %s, not %s — the "
+            "configuration changed at some point and these rows cannot be assigned; "
+            "left NULL",
+            n_orphans, (live.name if live else "no registered strategy"), target.name,
+        )
+        return 0
+
+    # GATE 3 — contiguous with what is already attributed.
+    attributed = db.execute(
+        select(func.min(Trade.opened_at), func.max(Trade.opened_at))
+        .where(Trade.stage.in_(_OBSERVATION_STAGES), Trade.strategy_id == target.id)
+    ).one()
+    if attributed[0] is not None and o_min < attributed[0]:
+        logger.warning(
+            "  orphans start %s, BEFORE %s's earliest attributed row %s — that implies "
+            "a period this strategy was not running; left NULL",
+            o_min, target.name, attributed[0],
+        )
+        return 0
+
+    logger.info(
+        "  %d rows %s..%s -> strategy %s (%s) [inferred: sole shadow/live strategy, "
+        "live config matches, contiguous]",
+        n_orphans, o_min, o_max, target.id, target.name,
+    )
+    if dry:
+        return n_orphans
+
+    stamp = datetime.now(timezone.utc).isoformat()
+    rows = db.execute(
+        select(Trade).where(
+            Trade.stage.in_(_OBSERVATION_STAGES), Trade.strategy_id.is_(None)
+        )
+    ).scalars().all()
+    for tr in rows:
+        tr.strategy_id = target.id
+        # Per-row provenance: this was inferred, not observed. Kept inside the
+        # `shadow` sub-dict so the flat feature keys the dataset reader consumes are
+        # untouched.
+        reasoning = dict(tr.signal_reasoning or {})
+        shadow_meta = dict(reasoning.get("shadow") or {})
+        shadow_meta["strategy_attributed_by"] = (
+            f"backfill_lineage {stamp}: inferred (sole shadow/live strategy, live "
+            f"config matched, contiguous) — not recorded at write time"
+        )
+        reasoning["shadow"] = shadow_meta
+        tr.signal_reasoning = reasoning
+    db.commit()
+    return n_orphans
+
+
 # ── step 3: register the corpora as datasets ─────────────────────────────────
 def step_datasets(db, dry: bool) -> int:
     logger.info("[3] registering datasets")
@@ -333,8 +441,14 @@ def main() -> None:
 
     db = SessionLocal()
     try:
+        settings = get_settings()
         n_runs, mapping = step_runs(db, dry)
-        total = n_runs + step_trades(db, dry, mapping) + step_datasets(db, dry)
+        total = (
+            n_runs
+            + step_trades(db, dry, mapping)
+            + step_observation_rows(db, dry, settings)
+            + step_datasets(db, dry)
+        )
         if dry:
             db.rollback()
             logger.info("\n[dry-run] %d change(s) would be applied", total)

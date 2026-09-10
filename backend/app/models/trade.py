@@ -9,17 +9,31 @@ from app.database import Base
 class Trade(Base):
     __tablename__ = "trades"
 
-    # M8-Shadow Phase 2 idempotency backstop: exactly one shadow row per
-    # (instrument, signal_time). PARTIAL — backtest rows are deliberately not
-    # constrained (a backtest re-run legitimately repeats the pair).
-    # See migration 20260801_shadow_trade_unique + services/shadow/recorder.py.
+    # Idempotency backstop for OBSERVATION rows: exactly one per
+    # (instrument, signal_time, strategy) across shadow and sandbox.
+    #
+    # `strategy_id` is in the key because two strategies watching the same pairs will
+    # routinely fire on the same instrument at the same bar — that is the normal case
+    # for variants sharing an entry rule, not an edge case. Without it the second
+    # write raises IntegrityError, the recorder reads that as "already recorded", and
+    # one strategy silently records nothing whenever it agrees with the other.
+    #
+    # COALESCE(strategy_id, 0) because Postgres treats NULL as distinct from NULL, so
+    # a bare nullable column would remove the guard from exactly the rows that most
+    # need it: the unattributed ones written when strategy resolution fails.
+    #
+    # PARTIAL — backtest rows are deliberately unconstrained (a re-run legitimately
+    # repeats the pair). Sandbox IS covered: those rows correspond to real broker
+    # orders and previously had no guard at all.
+    # See migration 20260911_obs_natural_key + services/shadow/recorder.py.
     __table_args__ = (
         Index(
-            "uq_trades_shadow_natural_key",
+            "uq_trades_observation_natural_key",
             "instrument_id",
             "opened_at",
+            text("COALESCE(strategy_id, 0)"),
             unique=True,
-            postgresql_where=text("stage = 'shadow'"),
+            postgresql_where=text("stage IN ('shadow', 'sandbox')"),
         ),
     )
 

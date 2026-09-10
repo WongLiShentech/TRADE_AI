@@ -109,3 +109,57 @@ def test_no_two_models_claim_the_same_version_of_one_strategy(db):
         )
     ).all()
     assert not dupes, f"duplicate (strategy_id, version): {dupes}"
+
+
+# ── migration hygiene ────────────────────────────────────────────────────────
+def test_every_revision_id_fits_alembic_version_column():
+    """`alembic_version.version_num` is VARCHAR(32) — a longer revision id fails at
+    the END of a successful migration, when Alembic stamps the new version.
+
+    It cost a deploy rehearsal to find: `20260911_shadow_key_multistrategy` is 33
+    characters, so the DDL applied, the stamp raised DataError, and the whole
+    transaction rolled back. On the server that is a failed `alembic upgrade head`
+    inside an entrypoint running `set -e` — the container does not start.
+    """
+    import re
+    from pathlib import Path
+
+    versions = Path(__file__).resolve().parents[1] / "migrations" / "versions"
+    offenders = []
+    for f in versions.glob("*.py"):
+        m = re.search(r"^revision:\s*str\s*=\s*['\"]([^'\"]+)['\"]", f.read_text(encoding="utf-8"), re.M)
+        if m and len(m.group(1)) > 32:
+            offenders.append((f.name, m.group(1), len(m.group(1))))
+    assert not offenders, f"revision ids exceeding 32 chars: {offenders}"
+
+
+def test_observation_key_covers_strategy_and_sandbox(db):
+    """The natural key must include the strategy, or a second strategy firing on the
+    same instrument and bar is mistaken for a duplicate and silently discarded — and
+    it must cover sandbox, whose rows correspond to real broker orders."""
+    row = db.execute(
+        text(
+            "SELECT indexdef FROM pg_indexes "
+            "WHERE tablename = 'trades' AND indexname = 'uq_trades_observation_natural_key'"
+        )
+    ).first()
+    assert row is not None, "uq_trades_observation_natural_key is missing"
+    definition = row[0]
+    assert "strategy_id" in definition, "strategy is not part of the natural key"
+    assert "sandbox" in definition, "sandbox rows are not covered by the guard"
+    assert "UNIQUE" in definition.upper()
+
+
+def test_pre_insert_duplicate_check_matches_the_index(db):
+    """The recorder's query-before-insert must key on the same columns as the index.
+    Narrower and writes reach the database and raise; wider and real duplicates slip
+    through to be caught only by the index."""
+    import inspect
+
+    from app.services.shadow import recorder
+
+    src = inspect.getsource(recorder._existing_shadow_row)
+    assert "strategy_id" in src, (
+        "_existing_shadow_row ignores strategy_id while the unique index includes it — "
+        "the two guards disagree"
+    )

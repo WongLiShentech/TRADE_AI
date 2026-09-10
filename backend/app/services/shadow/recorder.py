@@ -18,23 +18,33 @@ Safety posture (defense in depth)
 
 Idempotency
 -----------
-The natural key of a shadow row is ``(instrument_id, opened_at, stage='shadow')`` —
-``opened_at`` is the signal timestamp T, which is deterministic for a given decision
-bar, so re-running the candle-close pipeline for the same bar must not double-write.
+The natural key of an observation row is ``(instrument_id, opened_at, strategy_id)``
+over ``stage IN ('shadow','sandbox')``. ``opened_at`` is the signal timestamp T, which
+is deterministic for a given decision bar, so re-running the candle-close pipeline for
+the same bar must not double-write. ``strategy_id`` is in the key because two
+strategies sharing an entry rule will routinely fire on the same instrument at the
+same bar — without it, the second one's decision is mistaken for a duplicate of the
+first and silently discarded.
 Enforced twice:
 
 * **query-before-insert** in :func:`record_shadow_decision` (the normal path — cheap,
   and lets the caller distinguish "already recorded" from "written" via a ``None``
   return), and
-* a **partial unique index** ``uq_trades_shadow_natural_key`` on
-  ``(instrument_id, opened_at) WHERE stage = 'shadow'`` (migration
-  ``2026_08_01_shadow_trade_unique``) as the durable backstop against a race between
-  two pipeline invocations. An ``IntegrityError`` from that index is caught, rolled
-  back and treated as "already recorded".
+* a **partial unique index** ``uq_trades_observation_natural_key`` on
+  ``(instrument_id, opened_at, COALESCE(strategy_id, 0)) WHERE stage IN
+  ('shadow','sandbox')`` (migration ``2026_09_11_obs_natural_key``) as the
+  durable backstop against a race between two pipeline invocations. An
+  ``IntegrityError`` from that index is caught, rolled back and treated as "already
+  recorded".
 
-The index is partial so it constrains ONLY shadow rows — the existing
+The two checks must stay in lockstep: a narrower pre-check lets writes reach the
+database and raise, a wider one lets real duplicates through to be caught only by the
+index.
+
+The index is partial so it constrains ONLY observation rows — the existing
 ``stage='backtest'`` corpus legitimately repeats an ``(instrument_id, opened_at)``
-pair across backtest re-runs and must not be constrained.
+pair across backtest re-runs and must not be constrained. Sandbox IS covered: those
+rows correspond to real broker orders and previously had no guard at all.
 
 NaN-probability policy
 ----------------------
@@ -86,12 +96,14 @@ from app.config import Settings
 from app.domain.timeframes import get_timeframe
 from app.models.candle import Candle
 from app.models.instrument import Instrument
+from app.models.model_decision import ModelDecision
 from app.models.trade import Trade
 from app.services.feature_builder import FEATURE_KEYS_MODEL, json_safe
 from app.services.ml import inference as inf
 from app.services.ml.inference import LoadedModel
 from app.services.risk_engine import ValidatedSignal
 from app.services.signal_engine.base import SignalOutput
+from app.services.strategy_registry import resolve_active_strategy
 
 logger = logging.getLogger(__name__)
 
@@ -273,10 +285,27 @@ def record_shadow_decision(
         return None
     _assert_order_placement_disabled(settings, stage)
 
-    if _existing_shadow_row(db, instrument.id, signal_time, stage) is not None:
-        logger.debug(
-            "shadow: row already exists for %s @ %s — skipping duplicate write",
+    # WHICH CONFIGURATION produced this signal, derived from the running config so it
+    # cannot drift from what the engine actually did. Resolved BEFORE the duplicate
+    # check, because the strategy is part of the natural key: without it, a second
+    # strategy firing on the same instrument and bar would be mistaken for a repeat of
+    # the first and silently dropped.
+    #
+    # A None is deliberately NOT fatal. Attribution is bookkeeping; refusing to record
+    # a decision over it would destroy the very evidence the row exists to capture.
+    strategy = resolve_active_strategy(db, settings)
+    strategy_id = strategy.id if strategy is not None else None
+    if strategy is None:
+        logger.error(
+            "shadow: no strategy resolved for %s @ %s — row will be UNATTRIBUTED and "
+            "unusable for training until backfilled",
             instrument.symbol, signal_time,
+        )
+
+    if _existing_shadow_row(db, instrument.id, signal_time, stage, strategy_id) is not None:
+        logger.debug(
+            "shadow: row already exists for %s @ %s (strategy=%s) — skipping duplicate write",
+            instrument.symbol, signal_time, strategy_id,
         )
         return None
 
@@ -297,6 +326,7 @@ def record_shadow_decision(
     reward = abs(signal.target - signal.entry)
     pip_size = instrument.pip_size or 0.0
     trade = Trade(
+        strategy_id=strategy_id,
         instrument_id=instrument.id,
         direction=signal.direction,
         entry_price=signal.entry,
@@ -338,6 +368,26 @@ def record_shadow_decision(
         )
         return None
     db.refresh(trade)
+
+    # ── the model's verdict, as its own row ──────────────────────────────────
+    # `trades.ml_*` holds exactly ONE opinion. The moment a second model scores live
+    # signals — a challenger running beside the champion — it would overwrite the
+    # first, and "where did they disagree, and who was right?" becomes unanswerable.
+    # That question IS the promotion decision, so the columns cannot be the record.
+    #
+    # is_authoritative marks the verdict that actually GOVERNED this row (the one
+    # whose take/skip is mirrored into trades.ml_*). Exactly one per trade.
+    if decision is not None:
+        db.add(ModelDecision(
+            trade_id=trade.id,
+            model_id=loaded_model.model_id,
+            probability=decision.probability,
+            decision=decision.decision,
+            threshold=float(settings.ML_DECISION_THRESHOLD),
+            nan_features=len(nan_keys),
+            is_authoritative=True,
+        ))
+        db.commit()
 
     logger.info(
         "shadow recorded: %s %s %s p=%s decision=%s risk=%s model=%s nan_model_features=%d",
@@ -398,18 +448,32 @@ def _assert_order_placement_disabled(settings: Settings, stage: str) -> None:
 
 
 def _existing_shadow_row(
-    db: Session, instrument_id: int, signal_time: datetime, stage: str = STAGE_SHADOW
+    db: Session,
+    instrument_id: int,
+    signal_time: datetime,
+    stage: str = STAGE_SHADOW,
+    strategy_id: Optional[int] = None,
 ) -> Optional[int]:
-    """Natural-key guard: one shadow row per (instrument, signal_time)."""
-    row = (
-        db.query(Trade.id)
-        .filter(
-            Trade.instrument_id == instrument_id,
-            Trade.stage == stage,
-            Trade.opened_at == signal_time,
-        )
-        .first()
+    """Natural-key guard: one row per (instrument, signal_time, strategy).
+
+    ``strategy_id`` is part of the key for the same reason it is part of the unique
+    index: two strategies sharing an entry rule will routinely fire on the same
+    instrument at the same bar, and treating that as a duplicate would silently
+    discard the second one's decision. This check must mirror the index exactly — if
+    it is narrower, the write reaches the database and raises; if it is wider, real
+    duplicates slip through to be caught only by the index.
+
+    A NULL ``strategy_id`` is matched with ``IS NULL`` rather than ``= NULL``, which
+    mirrors the index's ``COALESCE(strategy_id, 0)`` bucket.
+    """
+    q = db.query(Trade.id).filter(
+        Trade.instrument_id == instrument_id,
+        Trade.stage == stage,
+        Trade.opened_at == signal_time,
     )
+    q = q.filter(Trade.strategy_id.is_(None) if strategy_id is None
+                 else Trade.strategy_id == strategy_id)
+    row = q.first()
     return None if row is None else int(row[0])
 
 

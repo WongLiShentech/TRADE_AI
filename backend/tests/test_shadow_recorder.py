@@ -305,21 +305,81 @@ def test_different_signal_times_write_separate_rows(db, settings, inst, signal, 
     assert len(_shadow_rows(db, inst)) == 2
 
 
-def test_db_partial_unique_index_backstops_the_natural_key(db, settings, inst, signal, features, model):
-    """Bypass the query-before-insert guard: the DB index must still refuse the dup."""
-    from sqlalchemy.exc import IntegrityError
-
-    _record(db, settings, inst, signal, features, model)
-    db.add(Trade(
+def _bare_shadow_row(inst, strategy_id):
+    return Trade(
         instrument_id=inst.id, direction="BUY",
         entry_price=1.0, stop_price=0.9, tp_price=1.2,
         units=0, risk_amount=0.0, expected_pip_loss=0.0, rr_entry=2.0,
         signal_source="rule_based", stage=rec.STAGE_SHADOW, opened_at=_T_BASE,
-    ))
+        strategy_id=strategy_id,
+    )
+
+
+def test_db_partial_unique_index_backstops_the_natural_key(db, settings, inst, signal, features, model):
+    """Bypass the query-before-insert guard: the DB index must still refuse the dup.
+
+    The duplicate must carry the SAME strategy_id as the recorded row — the natural
+    key is (instrument, signal_time, strategy), so a row with a different strategy is
+    not a duplicate at all, it is the second strategy's opinion.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    written = _record(db, settings, inst, signal, features, model)
+    db.add(_bare_shadow_row(inst, written.strategy_id))
     with pytest.raises(IntegrityError):
         db.commit()
     db.rollback()
     assert len(_shadow_rows(db, inst)) == 1
+
+
+def test_two_strategies_may_both_record_the_same_instrument_and_bar(
+    db, settings, inst, signal, features, model
+):
+    """The reason the key was widened.
+
+    Two strategies sharing an entry rule fire on the same instrument at the same H4
+    close constantly — that is the normal case, not an edge case. Under the old key
+    the second write raised IntegrityError, the recorder read that as "already
+    recorded", and one strategy silently recorded nothing whenever it agreed with the
+    other. A filter that stops recording when it agrees is worse than no filter: the
+    gap is invisible and biased.
+    """
+    from app.models.strategy import Strategy
+
+    written = _record(db, settings, inst, signal, features, model)
+    # A REAL second strategy — strategy_id is a foreign key, so a fabricated id would
+    # fail on the constraint rather than exercising the unique index.
+    other = (
+        db.query(Strategy)
+        .filter(Strategy.id != written.strategy_id)
+        .order_by(Strategy.id)
+        .first()
+    )
+    if other is None:
+        pytest.skip("only one strategy registered — nothing to collide with")
+
+    db.add(_bare_shadow_row(inst, other.id))
+    db.commit()   # must NOT raise
+    rows = _shadow_rows(db, inst)
+    assert len(rows) == 2, "the second strategy's observation was rejected"
+    assert {r.strategy_id for r in rows} == {written.strategy_id, other.id}
+
+
+def test_unattributed_rows_still_get_a_duplicate_guard(db, settings, inst, signal, features, model):
+    """COALESCE(strategy_id, 0) exists so NULL rows share one bucket.
+
+    Postgres treats NULL as distinct from NULL, so a bare nullable column in a unique
+    index would remove the guard from precisely the rows that most need it — the
+    unattributed ones written when strategy resolution fails.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    db.add(_bare_shadow_row(inst, None))
+    db.commit()
+    db.add(_bare_shadow_row(inst, None))
+    with pytest.raises(IntegrityError):
+        db.commit()
+    db.rollback()
 
 
 # ── 4. safety gates ──────────────────────────────────────────────────────────
@@ -814,3 +874,41 @@ def test_sentinel_purge_still_removes_the_suites_own_rows(db, settings, inst, si
     db.commit()
 
     assert _shadow_rows(db, inst) == []
+
+
+# ── model_decisions: the record that makes two models comparable ─────────────
+def test_a_model_decision_row_is_written_alongside_the_trade(
+    db, settings, inst, signal, features, model
+):
+    """`trades.ml_*` holds exactly ONE opinion per signal.
+
+    The moment a challenger scores live signals beside the champion it overwrites the
+    incumbent's verdict, and "where did they disagree, and who was right?" becomes
+    unanswerable — which IS the promotion decision. The columns therefore cannot be
+    the record; `model_decisions` is.
+
+    This shipped unwritten: the table existed for a week and only a one-off backfill
+    ever inserted into it, so 163 live decisions produced 45 rows.
+    """
+    from app.models.model_decision import ModelDecision
+
+    written = _record(db, settings, inst, signal, features, model)
+    assert written is not None
+
+    rows = db.query(ModelDecision).filter(ModelDecision.trade_id == written.id).all()
+    try:
+        assert len(rows) == 1, "no ModelDecision written for a scored shadow row"
+        d = rows[0]
+        assert d.model_id == written.ml_model_id, "decision names a different artifact"
+        assert d.decision == written.ml_decision
+        assert d.probability == written.ml_probability
+        assert d.threshold == float(settings.ML_DECISION_THRESHOLD), (
+            "the threshold must be stored with the verdict — a probability alone "
+            "cannot be re-evaluated later without knowing what it was compared against"
+        )
+        # Exactly one verdict per trade may claim to have governed it.
+        assert d.is_authoritative is True
+    finally:
+        for r in rows:
+            db.delete(r)
+        db.commit()

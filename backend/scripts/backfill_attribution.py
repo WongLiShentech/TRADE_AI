@@ -66,6 +66,7 @@ from app.database import SessionLocal
 from app.models import BacktestRun, ModelDecision, Strategy, Trade, TradePath
 from app.services.backtester.simulator import simulate
 from app.services.shadow.resolver import resolve_pending
+from app.services.strategy_registry import ENGINE, IDENTITY_PARAMS, params_hash
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger("backfill")
@@ -74,21 +75,10 @@ logger = logging.getLogger("backfill")
 # thresholds, fold bounds and window bounds: those govern how a backtest is
 # EVALUATED, not what signals it produces, and folding them into the identity
 # would make an unchanged strategy look new every time a gate was retuned.
-_IDENTITY_PARAMS = (
-    "SIGNAL_MIN_CONFLUENCE_SCORE",
-    "SIGNAL_SESSION_FILTER",
-    "SIGNAL_STOP_ATR_MULTIPLIER",
-    "SIGNAL_COOLDOWN_BARS_AFTER_CLOSE",
-    "SIGNAL_NO_TRADE_HOURS_BEFORE_FRIDAY_CLOSE",
-    "MIN_RR_RATIO",
-    "ATR_MULTIPLIER_MAX",
-    "SIGNAL_MAX_HOLD_BARS",
-    "BACKTEST_TRAILING_LOCK_PCT",
-    "BACKTEST_TRAILING_DISTANCE_ATR_MULT",
-)
+_IDENTITY_PARAMS = IDENTITY_PARAMS
 
 _STRATEGY_NAME = "rule_based_v1"
-_ENGINE = "rule_based"
+_ENGINE = ENGINE
 _ATR_KEY = "atr14"
 _COMMIT_EVERY = 100
 # Above this fraction of rr_actual mismatches, stop: isolated differences can come
@@ -98,10 +88,10 @@ _MAX_MISMATCH_RATE = 0.01
 _RR_TOLERANCE = 1e-6
 
 
-def _params_hash(engine: str, params: dict) -> str:
-    """Stable digest over engine + identity params. Same input ⇒ same id, forever."""
-    payload = json.dumps({"engine": engine, "params": params}, sort_keys=True, default=str)
-    return hashlib.sha1(payload.encode()).hexdigest()[:12]
+# Re-exported so existing callers (backfill_lineage, run_strategy2_backtest) keep
+# working, but the DEFINITION now lives in app/services/strategy_registry.py — the
+# live path needs it too, and two copies of an identity rule eventually disagree.
+_params_hash = params_hash
 
 
 def _atr_of(trade: Trade) -> Optional[float]:
