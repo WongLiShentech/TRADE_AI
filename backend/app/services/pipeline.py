@@ -58,6 +58,11 @@ from app.services.sandbox import executor as sandbox
 from app.services.shadow import RiskAssessment, live_signal_time, record_shadow_decision
 from app.services.signal_engine.base import SignalOutput
 from app.services.signal_engine.factory import get_signal_engine
+from app.services.strategy_registry import (
+    active_strategies,
+    resolve_active_strategy,
+    settings_for as strategy_settings,
+)
 from app.domain.timeframes import get_timeframe
 
 logger = logging.getLogger(__name__)
@@ -107,10 +112,46 @@ def run_candle_close_pipeline(granularity: str, settings: Settings) -> dict:
         loaded_model = _load_shadow_model(settings)
         summary["shadow_enabled"] = loaded_model is not None
 
-        # 3. Per-instrument pipeline
+        # 3. Per-instrument pipeline, evaluated once PER ACTIVE STRATEGY.
+        #
+        # Candle fetch and indicator computation are strategy-INDEPENDENT and stay
+        # outside the strategy loop: they describe the market, not a configuration,
+        # and running them per strategy would re-fetch identical bars N times.
         active = db.query(Instrument).filter_by(is_active=True).all()
-        engine = get_signal_engine(settings)
         router = BrokerRouter(settings)
+
+        strategies = active_strategies(db)
+        if not strategies:
+            # Fall back to the running configuration rather than evaluating nothing.
+            # An empty registry is a bookkeeping problem; silently trading nothing
+            # because of one is a worse failure than the one it replaced.
+            fallback = resolve_active_strategy(db, settings)
+            strategies = [fallback] if fallback is not None else []
+            logger.warning(
+                "no strategy is shadow/live — falling back to the running config (%s)",
+                fallback.name if fallback else "unresolvable",
+            )
+
+        # Several strategies in `shadow` is free — they only record opinions. Several
+        # `live` is NOT: each sizes independently against the same balance, so a shared
+        # view is taken at N times the intended risk. Capital allocation across
+        # strategies does not exist, so this refuses rather than silently doubling.
+        live_count = sum(1 for st in strategies if st.status == "live")
+        if live_count > 1:
+            raise RuntimeError(
+                f"{live_count} strategies have status='live'. Each sizes independently "
+                f"against the same balance, so a shared view would be taken at "
+                f"{live_count}x the intended risk. Capital allocation across strategies "
+                f"is not implemented — set all but one to 'shadow'."
+            )
+
+        engines = [
+            (st, get_signal_engine(strategy_settings(settings, st)),
+             strategy_settings(settings, st))
+            for st in strategies
+        ]
+        summary["strategies"] = len(engines)
+
         for inst in active:
             try:
                 fetched = candle_service.fetch_and_store_latest(inst.symbol, granularity, db, settings)
@@ -119,62 +160,77 @@ def run_candle_close_pipeline(granularity: str, settings: Settings) -> dict:
                 computed = indicator_service.compute_and_store(inst.symbol, granularity, db, settings)
                 summary["computed"] += computed
 
-                output = engine.evaluate(inst.symbol, granularity, db, settings)
-                summary["evaluated"] += 1
-                if output is not None:
-                    risk_amount = settings.STARTING_BALANCE * settings.RISK_PCT_PER_TRADE
-                    risk: RiskAssessment
-                    try:
-                        broker = router.for_instrument(inst.symbol, db)
-                        risk_engine = RiskEngine(settings, broker)
-                        validated = risk_engine.validate(output, settings.STARTING_BALANCE, db, inst)
-                        persist_signal(validated, inst.id, db)
-                        summary["signals"] += 1
-                        risk = RiskAssessment.approved(validated)
-                        logger.info(
-                            "signal approved: %s %s %s score=%d units=%d",
-                            output.instrument, output.granularity, output.direction,
-                            output.confidence_score, validated.units,
-                        )
-                    except RiskValidationError as exc:
-                        _persist_rejected(output, inst.id, str(exc), db)
-                        summary["rejected"] = summary.get("rejected", 0) + 1
-                        risk = RiskAssessment.rejected(str(exc), risk_amount)
-                        logger.info("signal rejected: %s reason=%s", inst.symbol, str(exc))
-                    except (httpx.HTTPError, OSError, ValueError) as exc:
-                        # Broker/transport failure inside RiskEngine.validate — NOT a
-                        # risk-rule breach. Degrade to a rejected assessment so the
-                        # signal is still persisted and the shadow row is still
-                        # recorded; letting this reach the outer handler would discard
-                        # the observation entirely.
-                        #   httpx.HTTPError  — connect/read/status errors from OANDA
-                        #   OSError          — DNS/socket-level failures
-                        #   ValueError       — OandaClient.get_pip_value raises this for
-                        #                      an empty `prices` array or a missing home
-                        #                      conversion, i.e. a bad broker payload
-                        db.rollback()
-                        summary["rejected"] = summary.get("rejected", 0) + 1
-                        risk = RiskAssessment.rejected(
-                            RISK_REASON_PIP_VALUE_UNAVAILABLE, risk_amount
-                        )
-                        _persist_rejected(
-                            output, inst.id, RISK_REASON_PIP_VALUE_UNAVAILABLE, db
-                        )
-                        logger.error(
-                            "risk validation could not complete for %s — broker pip-value "
-                            "call failed (%s: %s); signal recorded as %s so the shadow "
-                            "observation is not lost",
-                            inst.symbol, type(exc).__name__, exc,
-                            RISK_REASON_PIP_VALUE_UNAVAILABLE,
-                        )
+                for strategy, engine, s_settings in engines:
+                  # One strategy failing must not cost the others their evaluation of
+                  # this bar — they are independent observers of the same market.
+                  try:
+                    output = engine.evaluate(inst.symbol, granularity, db, s_settings)
+                    summary["evaluated"] += 1
+                    if output is not None:
+                        risk_amount = s_settings.STARTING_BALANCE * s_settings.RISK_PCT_PER_TRADE
+                        risk: RiskAssessment
+                        try:
+                            broker = router.for_instrument(inst.symbol, db)
+                            risk_engine = RiskEngine(s_settings, broker)
+                            validated = risk_engine.validate(output, s_settings.STARTING_BALANCE, db, inst)
+                            persist_signal(validated, inst.id, db)
+                            summary["signals"] += 1
+                            risk = RiskAssessment.approved(validated)
+                            logger.info(
+                                "signal approved: %s %s %s score=%d units=%d",
+                                output.instrument, output.granularity, output.direction,
+                                output.confidence_score, validated.units,
+                            )
+                        except RiskValidationError as exc:
+                            _persist_rejected(output, inst.id, str(exc), db)
+                            summary["rejected"] = summary.get("rejected", 0) + 1
+                            risk = RiskAssessment.rejected(str(exc), risk_amount)
+                            logger.info("signal rejected: %s reason=%s", inst.symbol, str(exc))
+                        except (httpx.HTTPError, OSError, ValueError) as exc:
+                            # Broker/transport failure inside RiskEngine.validate — NOT a
+                            # risk-rule breach. Degrade to a rejected assessment so the
+                            # signal is still persisted and the shadow row is still
+                            # recorded; letting this reach the outer handler would discard
+                            # the observation entirely.
+                            #   httpx.HTTPError  — connect/read/status errors from OANDA
+                            #   OSError          — DNS/socket-level failures
+                            #   ValueError       — OandaClient.get_pip_value raises this for
+                            #                      an empty `prices` array or a missing home
+                            #                      conversion, i.e. a bad broker payload
+                            db.rollback()
+                            summary["rejected"] = summary.get("rejected", 0) + 1
+                            risk = RiskAssessment.rejected(
+                                RISK_REASON_PIP_VALUE_UNAVAILABLE, risk_amount
+                            )
+                            _persist_rejected(
+                                output, inst.id, RISK_REASON_PIP_VALUE_UNAVAILABLE, db
+                            )
+                            logger.error(
+                                "risk validation could not complete for %s — broker pip-value "
+                                "call failed (%s: %s); signal recorded as %s so the shadow "
+                                "observation is not lost",
+                                inst.symbol, type(exc).__name__, exc,
+                                RISK_REASON_PIP_VALUE_UNAVAILABLE,
+                            )
 
-                    # M8-Shadow — ADDITIVE. Never influences the decision above and
-                    # never propagates an error into the trading path.
-                    shadow_status = _observe_shadow(db, settings, inst, output, risk, loaded_model)
-                    if shadow_status == SHADOW_RECORDED:
-                        summary["shadow_recorded"] += 1
-                    elif shadow_status == SHADOW_ERROR:
-                        summary["shadow_errors"] += 1
+                        # M8-Shadow — ADDITIVE. Never influences the decision above and
+                        # never propagates an error into the trading path.
+                        shadow_status = _observe_shadow(db, s_settings, inst, output, risk, loaded_model)
+                        if shadow_status == SHADOW_RECORDED:
+                            summary["shadow_recorded"] += 1
+                        elif shadow_status == SHADOW_ERROR:
+                            summary["shadow_errors"] += 1
+                  except Exception:
+                    # Per-STRATEGY isolation. The outer handler rolls back and abandons
+                    # the whole instrument — right for a broker or candle failure, wrong
+                    # for one strategy's engine raising, since the others observed the
+                    # same bar perfectly well and must still get to record it.
+                    db.rollback()
+                    summary["strategy_errors"] = summary.get("strategy_errors", 0) + 1
+                    logger.exception(
+                        "strategy %s (%s) failed on %s — other strategies unaffected",
+                        strategy.id, strategy.name, inst.symbol,
+                    )
             except Exception as exc:
                 # Roll back before moving to the next instrument. The session is
                 # SHARED across the whole loop, so a failed flush leaves it in a

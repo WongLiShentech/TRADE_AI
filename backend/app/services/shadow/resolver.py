@@ -86,11 +86,13 @@ from sqlalchemy.orm import Session
 from app.config import Settings
 from app.domain.timeframes import get_timeframe
 from app.models.candle import Candle
+from app.models.strategy import Strategy
 from app.models.trade import Trade
 from app.models.trade_path import TradePath
 from app.services.backtester.runner import label_outcome
 from app.services.backtester.simulator import horizon_bounds, simulate
 from app.services.shadow.recorder import REASONING_SHADOW_KEY, STAGE_SHADOW
+from app.services.strategy_registry import settings_for
 
 logger = logging.getLogger(__name__)
 
@@ -169,6 +171,9 @@ def resolve_pending(
 
     Never raises for a per-row problem — those are counted and logged.
     """
+    # A strategy's params can change between passes; a stale projection would grade
+    # rows by an exit rule the strategy no longer has.
+    _STRATEGY_SETTINGS_CACHE.clear()
     evaluated_at = _naive(now) if now is not None else datetime.utcnow()
     query = (
         db.query(Trade)
@@ -310,6 +315,32 @@ def observable_bars(
 
 
 # ── internals ────────────────────────────────────────────────────────────────
+# Cache per resolver pass: a run resolves many rows and they overwhelmingly share a
+# handful of strategies. Keyed by strategy id, so a config change between passes is
+# picked up on the next one.
+_STRATEGY_SETTINGS_CACHE: dict[int, Settings] = {}
+
+
+def _settings_for_trade(db: Session, settings: Settings, trade: Trade) -> Settings:
+    """Settings as the strategy that produced ``trade`` — global config if unknown."""
+    sid = getattr(trade, "strategy_id", None)
+    if sid is None:
+        return settings
+    cached = _STRATEGY_SETTINGS_CACHE.get(sid)
+    if cached is not None:
+        return cached
+    strategy = db.get(Strategy, sid)
+    if strategy is None:
+        logger.warning(
+            "shadow resolve: trade id=%s names strategy %s which no longer exists — "
+            "grading with the global config", trade.id, sid,
+        )
+        return settings
+    projected = settings_for(settings, strategy)
+    _STRATEGY_SETTINGS_CACHE[sid] = projected
+    return projected
+
+
 def _resolve_one(
     db: Session,
     settings: Settings,
@@ -322,6 +353,20 @@ def _resolve_one(
     ``"resolved"`` means the outcome columns were written and committed; anything
     else leaves the row untouched and pending.
     """
+    # Grade the row by the exit rule of the strategy that PRODUCED it, not by whatever
+    # the process happens to be configured with.
+    #
+    # With one strategy those were the same thing. With two they are not, and the
+    # difference is not cosmetic: relabelling one corpus under a pure-barrier exit
+    # instead of a trailing one flips 12.5% of outcomes. Grading every row by the
+    # global config would score a pure-barrier strategy's trades under a trailing rule
+    # — and the resulting labels would train the next model on a world that never
+    # existed.
+    #
+    # Falls back to the global settings when the row is unattributed, which is the
+    # old behaviour and the only sensible default for a row whose strategy is unknown.
+    settings = _settings_for_trade(db, settings, trade)
+
     signal_time = _naive(trade.opened_at)
     granularity = _granularity_of(trade, settings)
     base_hours, cap_hours = horizon_bounds(settings, granularity)

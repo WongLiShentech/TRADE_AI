@@ -163,3 +163,62 @@ def test_pre_insert_duplicate_check_matches_the_index(db):
         "_existing_shadow_row ignores strategy_id while the unique index includes it — "
         "the two guards disagree"
     )
+
+
+# ── multi-strategy runtime ───────────────────────────────────────────────────
+def test_pipeline_evaluates_every_active_strategy():
+    """The loop must iterate strategies, not evaluate one and stop.
+
+    It previously called `get_signal_engine(settings)` exactly once, from the single
+    running config. Two strategies could be registered, attributed and trained on
+    separately — and only one would ever produce a live signal, which is a gap that
+    looks like a working feature from the database.
+    """
+    import inspect
+
+    from app.services import pipeline
+
+    src = inspect.getsource(pipeline)
+    assert "active_strategies(db)" in src, "the pipeline does not enumerate strategies"
+    assert "for strategy, engine, s_settings in engines" in src, (
+        "the pipeline does not iterate per-strategy engines"
+    )
+    assert "get_signal_engine(strategy_settings(" in src, (
+        "engines are not bound to their strategy's parameters"
+    )
+
+
+def test_pipeline_refuses_more_than_one_live_strategy():
+    """Several strategies in `shadow` is free — they only record opinions. Several
+    `live` is not: each sizes independently against the same balance, so a shared view
+    would be taken at N times the intended risk. Capital allocation across strategies
+    does not exist, so the loop must refuse rather than silently double."""
+    import inspect
+
+    from app.services import pipeline
+
+    src = inspect.getsource(pipeline.run_candle_close_pipeline)
+    assert 'st.status == "live"' in src and "RuntimeError" in src, (
+        "nothing stops two live strategies from sizing against the same account"
+    )
+
+
+def test_resolver_grades_each_row_by_its_own_strategy():
+    """Outcomes must be produced by the exit rule of the strategy that made the trade.
+
+    The resolver took the exit rule from the global config, so every row was graded by
+    whatever the process happened to be configured with. With one strategy that was
+    the same thing; with two it relabels 12.5% of outcomes — and those labels are what
+    the next model trains on.
+    """
+    import inspect
+
+    from app.services.shadow import resolver
+
+    assert hasattr(resolver, "_settings_for_trade"), (
+        "the resolver has no per-strategy settings projection"
+    )
+    src = inspect.getsource(resolver._resolve_one)
+    assert "_settings_for_trade(" in src, (
+        "_resolve_one still grades with the global settings"
+    )

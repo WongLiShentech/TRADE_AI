@@ -142,3 +142,57 @@ def resolve_active_strategy(
     db.commit()
     db.refresh(strategy)
     return strategy
+
+
+def active_strategies(db: Session) -> list[Strategy]:
+    """Strategies that should be evaluated on live bars, in a stable order.
+
+    ``shadow`` and ``live`` only. ``research`` is deliberately excluded: a strategy
+    registered so a backtest could run against it must not start consuming live
+    signals merely because it exists in the table — becoming live is a deliberate act
+    of changing its status, not a side effect of registration.
+
+    Ordered by id so the evaluation order is deterministic across restarts.
+    """
+    return list(
+        db.query(Strategy)
+        .filter(Strategy.status.in_(("shadow", "live")))
+        .order_by(Strategy.id)
+        .all()
+    )
+
+
+def settings_for(settings: Settings, strategy: Strategy) -> Settings:
+    """A Settings view configured AS ``strategy``.
+
+    Why this exists
+    ---------------
+    Every consumer of strategy parameters — the signal engine, the outcome resolver,
+    the simulator — reads them off a ``Settings`` object. Rather than teaching each of
+    them to accept a strategy, the strategy is projected onto a Settings copy. One
+    mechanism, and no consumer needs to know strategies exist.
+
+    This is what makes per-strategy GRADING possible. The resolver previously took the
+    exit rule from the global config, so every row was graded by whatever the process
+    happened to be configured with — which meant a row produced by a trailing strategy
+    and one produced by a pure-barrier strategy were scored identically. With two
+    strategies live that is not a rounding error: it relabels 12.5% of outcomes.
+
+    Only keys present in ``IDENTITY_PARAMS`` are applied, so a stored ``params`` blob
+    can never reach in and change something unrelated (a promotion threshold, a
+    credential). ``model_copy`` returns a new object — the cached global Settings is
+    never mutated.
+    """
+    overrides = {
+        k: v for k, v in (strategy.params or {}).items() if k in IDENTITY_PARAMS
+    }
+    missing = [k for k in IDENTITY_PARAMS if k not in overrides]
+    if missing:
+        # Not fatal: the un-overridden keys fall back to the global config, which is
+        # the old behaviour. But it means this strategy is not fully described by its
+        # own record, and that is worth knowing about.
+        logger.warning(
+            "strategy %s (%s) params lack %s — those fall back to global config",
+            strategy.id, strategy.name, missing,
+        )
+    return settings.model_copy(update=overrides)
