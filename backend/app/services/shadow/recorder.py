@@ -377,16 +377,52 @@ def record_shadow_decision(
     #
     # is_authoritative marks the verdict that actually GOVERNED this row (the one
     # whose take/skip is mirrored into trades.ml_*). Exactly one per trade.
+    verdicts = []
     if decision is not None:
+        verdicts.append((loaded_model, decision, True))
+
+    # Challengers score the SAME signal and record their opinion — never touching
+    # trades.ml_*, never changing take/skip, never able to cause an order. Identical
+    # evidence is what makes the comparison meaningful, and being free of consequence
+    # is what makes running one worth doing.
+    for challenger in inf.load_challengers(settings):
+        ch_decision, ch_error = _score_safely(
+            challenger, features, settings,
+            # Its own cut-off, selected on its own validation tail. Scoring it at the
+            # champion's would measure the threshold rather than the model.
+            threshold=getattr(challenger, "deployment_threshold", None),
+        )
+        if ch_decision is None:
+            logger.warning(
+                "challenger %s failed to score %s @ %s: %s",
+                challenger.model_id, instrument.symbol, signal_time, ch_error,
+            )
+            continue
+        verdicts.append((challenger, ch_decision, False))
+
+    for model, verdict, authoritative in verdicts:
         db.add(ModelDecision(
             trade_id=trade.id,
-            model_id=loaded_model.model_id,
-            probability=decision.probability,
-            decision=decision.decision,
-            threshold=float(settings.ML_DECISION_THRESHOLD),
+            model_id=model.model_id,
+            probability=verdict.probability,
+            decision=verdict.decision,
+            # The model's OWN deployment threshold, not the global setting: a
+            # challenger trained on different data has its own cut-off, and comparing
+            # two models through one threshold would measure the threshold rather than
+            # the models. Falls back to the global one when the artifact carries none.
+            # The cut-off that ACTUALLY governed this verdict. For the champion that
+            # is the configured value (what the live system applied); for a challenger
+            # it is the artifact's own. Recording a probability without the threshold
+            # it was compared against makes the verdict unreproducible later.
+            threshold=float(
+                settings.ML_DECISION_THRESHOLD if authoritative
+                else (getattr(model, "deployment_threshold", None)
+                      or settings.ML_DECISION_THRESHOLD)
+            ),
             nan_features=len(nan_keys),
-            is_authoritative=True,
+            is_authoritative=authoritative,
         ))
+    if verdicts:
         db.commit()
 
     logger.info(
@@ -527,7 +563,11 @@ def _warn_if_degraded(
 
 
 def _score_safely(
-    loaded_model: LoadedModel, features: dict, settings: Settings
+    loaded_model: LoadedModel,
+    features: dict,
+    settings: Settings,
+    *,
+    threshold: Optional[float] = None,
 ) -> tuple[Optional[inf.ShadowDecision], Optional[str]]:
     """Score without ever letting the live loop die.
 
@@ -538,7 +578,7 @@ def _score_safely(
     explicit error marker — see the module docstring for the rationale.
     """
     try:
-        return inf.score_and_decide(loaded_model, features, settings), None
+        return inf.score_and_decide(loaded_model, features, settings, threshold=threshold), None
     except Exception as exc:  # noqa: BLE001 — a scoring failure must never halt live
         logger.warning(
             "shadow: scoring failed for model=%s (%s: %s) — recording row with NULL "

@@ -160,6 +160,20 @@ class Settings(BaseSettings):
     # AND ORDER_PLACEMENT_ENABLED is false — that pair is what makes observing a
     # rejected model safe by construction.
     ML_ALLOW_UNPROMOTED_MODEL: bool
+    # CHALLENGER artifacts — comma-separated paths, empty for none. Each is scored on
+    # every live signal alongside the champion (ML_MODEL_PATH) and its verdict is
+    # written to `model_decisions` with is_authoritative=False.
+    #
+    # A challenger NEVER influences behaviour: it does not touch trades.ml_*, does not
+    # change take/skip, and cannot cause an order. That is the entire point — running
+    # a candidate beside the incumbent on identical live signals is the only way to
+    # answer "where did they disagree, and who was right?", which is what promotion
+    # turns on, and it has to be free of consequence to be worth doing.
+    #
+    # Defaulted to "" rather than required, because a deployment with no challenger is
+    # the normal case and every other ML_ setting being mandatory would make adding
+    # this a breaking config change for an optional feature.
+    ML_CHALLENGER_MODEL_PATHS: str = ""
     # Shadow outcome resolver (Phase 3) cadence, in hours between runs. The resolver
     # is idempotent and cheap when the queue is empty, so a low value only costs a
     # bounded query; it never re-touches an already-resolved row.

@@ -163,6 +163,55 @@ def load_model(settings: Settings, *, force_reload: bool = False) -> LoadedModel
     return loaded
 
 
+def load_challengers(settings: Settings) -> list[LoadedModel]:
+    """Load every challenger named in ``ML_CHALLENGER_MODEL_PATHS``.
+
+    A challenger is scored on the same live signals as the champion so their verdicts
+    can be compared on identical evidence — the only comparison that answers "where
+    did they disagree, and who was right?", which is what promotion turns on.
+
+    Failure is per-model and NEVER propagates. A challenger that will not load is a
+    research inconvenience; the champion still has to score the signal and the row
+    still has to be written. Letting a broken challenger take down the live path would
+    make adding one strictly more dangerous than not bothering, which would defeat the
+    purpose.
+
+    The champion is deliberately excluded if it also appears in the list, so it cannot
+    be recorded twice — once authoritative, once not — which would double-count it in
+    any agreement statistic.
+
+    Returns:
+        Successfully loaded challengers, possibly empty. Order follows the setting.
+    """
+    raw = (getattr(settings, "ML_CHALLENGER_MODEL_PATHS", "") or "").strip()
+    if not raw:
+        return []
+
+    champion = str(resolve_model_path(settings))
+    out: list[LoadedModel] = []
+    seen: set[str] = {champion}
+    for entry in (e.strip() for e in raw.split(",")):
+        if not entry:
+            continue
+        path = Path(entry)
+        if not path.is_absolute():
+            path = _BACKEND_ROOT / path
+        key = str(path)
+        if key in seen:
+            logger.warning("challenger %s is the champion or a duplicate — skipped", entry)
+            continue
+        seen.add(key)
+        try:
+            loaded = _CACHE.get(key) or _load_from_disk(path)
+            _CACHE[key] = loaded
+            _enforce_safety_guards(loaded, settings)
+            out.append(loaded)
+            logger.info("challenger loaded: %s", loaded.model_id)
+        except Exception as exc:   # noqa: BLE001 — see docstring: never propagate
+            logger.error("challenger %s failed to load (%s) — continuing without it", entry, exc)
+    return out
+
+
 def score(loaded_model: LoadedModel, features: dict) -> float:
     """Score one ``build_features`` dict → P(win).
 
@@ -207,16 +256,32 @@ def decide(prob: float, settings: Settings) -> str:
 
 
 def score_and_decide(
-    loaded_model: LoadedModel, features: dict, settings: Settings
+    loaded_model: LoadedModel,
+    features: dict,
+    settings: Settings,
+    *,
+    threshold: float | None = None,
 ) -> ShadowDecision:
     """Convenience chokepoint: score a feature dict and resolve the decision.
 
     This is the single call the live shadow path (Phase 2) makes per signal.
+
+    Args:
+        threshold: override the configured cut-off. Used when scoring a CHALLENGER,
+            which has its own ``deployment_threshold`` selected on its own validation
+            tail. Judging it at the champion's cut-off would measure the threshold
+            rather than the model — v2's is 0.236 and v3's is 0.343, so the challenger
+            would look far more permissive than it is and every agreement statistic
+            would be about the wrong thing. ``None`` keeps the configured value, which
+            is what the champion must use because that is what actually governed.
     """
     prob = score(loaded_model, features)
+    cut = float(settings.ML_DECISION_THRESHOLD) if threshold is None else float(threshold)
+    if prob != prob:  # NaN — same contract as decide(): never silently 'skip'
+        raise ValueError(f"model {loaded_model.model_id} returned NaN probability")
     return ShadowDecision(
         probability=prob,
-        decision=decide(prob, settings),
+        decision=DECISION_TAKE if prob >= cut else DECISION_SKIP,
         model_id=loaded_model.model_id,
     )
 

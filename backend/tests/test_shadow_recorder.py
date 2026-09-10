@@ -912,3 +912,85 @@ def test_a_model_decision_row_is_written_alongside_the_trade(
         for r in rows:
             db.delete(r)
         db.commit()
+
+
+# ── challengers: a second model scoring the same signal ──────────────────────
+def _challenger_path():
+    """A promoted artifact on the same feature schema as the champion.
+
+    v1 is schema 1 (20 features) and would be rejected by the feature-contract check,
+    which is correct behaviour and the wrong thing to test here.
+    """
+    from pathlib import Path
+
+    models = Path(__file__).resolve().parents[1] / "models"
+    for p in sorted(models.glob("s1_model_v*_schema2_*.joblib")):
+        return p
+    return None
+
+
+def test_challenger_records_its_own_verdict_without_governing(
+    db, settings, inst, signal, features, model
+):
+    """A challenger must record an opinion and change nothing else.
+
+    Running a candidate beside the incumbent on identical live signals is the only way
+    to answer "where did they disagree, and who was right?" — which is what promotion
+    turns on. It is worth doing precisely because it is free of consequence: the
+    challenger must not touch trades.ml_*, must not alter take/skip, and must never be
+    able to cause an order.
+    """
+    from app.models.model_decision import ModelDecision
+
+    path = _challenger_path()
+    if path is None:
+        pytest.skip("no schema-2 artifact available to act as a challenger")
+
+    with_ch = _settings_with(settings, ML_CHALLENGER_MODEL_PATHS=str(path))
+    written = _record(db, with_ch, inst, signal, features, model)
+    assert written is not None
+
+    rows = db.query(ModelDecision).filter(ModelDecision.trade_id == written.id).all()
+    try:
+        assert len(rows) == 2, f"expected champion + challenger, got {len(rows)}"
+        authoritative = [r for r in rows if r.is_authoritative]
+        challengers = [r for r in rows if not r.is_authoritative]
+        assert len(authoritative) == 1, "exactly one verdict may claim to have governed"
+        assert len(challengers) == 1
+
+        # The row itself still reflects ONLY the champion.
+        assert written.ml_model_id == authoritative[0].model_id
+        assert written.ml_decision == authoritative[0].decision
+        assert written.ml_probability == authoritative[0].probability
+
+        # Each verdict records the cut-off that actually produced it. Judging a
+        # challenger at the champion's threshold would measure the threshold rather
+        # than the model — v2's is 0.236 and v3's 0.343.
+        assert authoritative[0].threshold == float(with_ch.ML_DECISION_THRESHOLD)
+        assert challengers[0].model_id != authoritative[0].model_id
+    finally:
+        for r in rows:
+            db.delete(r)
+        db.commit()
+
+
+def test_a_broken_challenger_never_breaks_the_live_path(
+    db, settings, inst, signal, features, model
+):
+    """A challenger that will not load is a research inconvenience. The champion still
+    has to score the signal and the row still has to be written — otherwise adding a
+    challenger would be strictly more dangerous than not bothering."""
+    from app.models.model_decision import ModelDecision
+
+    broken = _settings_with(settings, ML_CHALLENGER_MODEL_PATHS="models/does_not_exist.joblib")
+    written = _record(db, broken, inst, signal, features, model)
+
+    assert written is not None, "a missing challenger took down the live write path"
+    assert written.ml_decision is not None, "the champion's verdict was lost"
+    rows = db.query(ModelDecision).filter(ModelDecision.trade_id == written.id).all()
+    try:
+        assert len(rows) == 1 and rows[0].is_authoritative
+    finally:
+        for r in rows:
+            db.delete(r)
+        db.commit()
