@@ -421,7 +421,9 @@ app/services/
 │                              (deploy: DEPLOYMENT.md; seed: scripts/export_slim_seed.py;
 │                               optional Pi retention: scripts/prune_m1_candles.py — NEVER on dev;
                                model registry backfill: scripts/backfill_models.py;
-                               run/dataset lineage: scripts/backfill_lineage.py)
+                               run/dataset lineage: scripts/backfill_lineage.py;
+                               a late-joining model's verdicts over past shadow rows:
+                               scripts/backfill_model_decisions.py — always is_authoritative=false)
 └── alerts/                  ← ABC + log (default) + email + telegram (both stubs)
 ```
 
