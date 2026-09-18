@@ -3,9 +3,8 @@
 Why this exists
 ----------------
 A model only produces a ``model_decisions`` row for signals scored while it was
-actually loaded — champion via ``ML_MODEL_PATH``, challenger via
-``ML_CHALLENGER_MODEL_PATHS``. A model added later (a new challenger, a promoted
-successor) has zero opinion on every signal recorded before it joined, even
+actually registered to score them. A model added later (a new challenger, a
+promoted successor) has zero opinion on every signal recorded before it joined, even
 though the feature vector for each of those signals is sitting right there in
 ``trades.signal_reasoning`` — the same JSON the live path reads, and the same one
 ``ml.dataset`` reads to build a training corpus.
@@ -32,11 +31,15 @@ model_id) index, and this script both pre-filters against it and inserts with
 ``ON CONFLICT DO NOTHING``, so re-running (on a schedule, after adding a new
 challenger) only ever fills the gap that has newly appeared.
 
-Extensible by construction: targets are resolved from live config exactly the
-way the shadow recorder resolves them (``inference.load_model`` +
-``inference.load_challengers``), so a model added to ``ML_CHALLENGER_MODEL_PATHS``
-tomorrow is backfillable with this same script and no code change. ``--model-id``
-narrows to one target when you don't want all of them touched.
+Scoped per strategy, for the same reason the live path is: a model's labels derive
+from ``rr_actual``, which depends on the exit rule, so a model is valid ONLY for the
+strategy whose outcomes taught it. Backfilling one across every strategy's rows
+would manufacture cross-strategy verdicts indistinguishable from real evidence.
+
+Extensible by construction: targets are resolved from the registry exactly the way
+the shadow recorder resolves them (``ml.registry.models_for_strategy`` over every
+shadow/live strategy), so a model registered tomorrow is backfillable with this same
+script and no code change. ``--model-id`` narrows to one target.
 
 Run from ``backend/``:
     python scripts/backfill_model_decisions.py --dry-run
@@ -61,7 +64,9 @@ from app.database import SessionLocal
 from app.models.model_decision import ModelDecision
 from app.models.trade import Trade
 from app.services.ml import inference as inf
+from app.services.ml.registry import RegisteredModel, models_for_strategy
 from app.services.shadow.recorder import _nan_model_features  # same helper the live path uses
+from app.services.strategy_registry import active_strategies
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger("backfill_model_decisions")
@@ -77,41 +82,37 @@ _ELIGIBLE_STAGES = ("shadow", "sandbox")
 _BATCH_SIZE = 200
 
 
-def _candidate_models(settings, only_model_id: str | None) -> list[inf.LoadedModel]:
-    """Resolve backfill targets exactly as the live recorder resolves scorers.
+def _targets(db, settings, only_model_id: str | None) -> list[tuple[int, RegisteredModel]]:
+    """(strategy_id, model) pairs to backfill, resolved from the registry.
 
-    Champion via ``load_model``, challengers via ``load_challengers`` — the same
-    two calls ``pipeline.py`` makes per signal. This is deliberate: a model this
-    script cannot reach here could never have been live-scoring in the first
-    place, so the target set is bounded by what production actually runs.
+    Scoped per strategy on purpose. A model is valid only for the strategy whose
+    outcomes taught it, so backfilling one across every strategy's rows would
+    manufacture exactly the cross-strategy verdicts the live path was fixed to stop
+    producing — and they would be indistinguishable from real evidence afterwards.
     """
-    models: list[inf.LoadedModel] = []
-    try:
-        models.append(inf.load_model(settings))
-    except Exception as exc:  # noqa: BLE001 — report and continue with challengers
-        logger.error("champion failed to load: %s", exc)
-    models.extend(inf.load_challengers(settings))
+    out: list[tuple[int, RegisteredModel]] = []
+    for strategy in active_strategies(db):
+        models = models_for_strategy(db, settings, strategy.id)
+        for m in models.all:
+            if only_model_id is None or m.model_id == only_model_id:
+                out.append((strategy.id, m))
 
-    if only_model_id is None:
-        return models
-    matched = [m for m in models if m.model_id == only_model_id]
-    if not matched:
-        available = ", ".join(m.model_id for m in models) or "(none loaded)"
+    if only_model_id is not None and not out:
         raise SystemExit(
-            f"--model-id {only_model_id!r} is not currently loaded as champion or "
-            f"challenger. Loaded: {available}. Point ML_MODEL_PATH / "
-            f"ML_CHALLENGER_MODEL_PATHS at it first — this script only backfills "
-            f"models the live config actually runs, never an arbitrary file."
+            f"--model-id {only_model_id!r} is not registered as champion or challenger "
+            f"for any shadow/live strategy. Set its `models.status` and `strategy_id` "
+            f"first — this script only backfills models the registry actually runs."
         )
-    return matched
+    return out
 
 
-def _missing_trade_ids(db, model_id: str) -> list[int]:
-    """Shadow/sandbox trades with a stored feature vector and no row yet for this model."""
+def _missing_trade_ids(db, model_id: str, strategy_id: int) -> list[int]:
+    """This strategy's rows that have a stored feature vector and no verdict from this model."""
     already = select(ModelDecision.trade_id).where(ModelDecision.model_id == model_id)
     rows = db.execute(
         select(Trade.id)
         .where(Trade.stage.in_(_ELIGIBLE_STAGES))
+        .where(Trade.strategy_id == strategy_id)
         .where(Trade.signal_reasoning.isnot(None))
         .where(Trade.id.notin_(already))
         .order_by(Trade.id.asc())
@@ -119,17 +120,21 @@ def _missing_trade_ids(db, model_id: str) -> list[int]:
     return list(rows)
 
 
-def backfill_one_model(db, loaded: inf.LoadedModel, *, dry_run: bool) -> dict:
-    """Score every eligible gap for one model. Returns a summary dict."""
-    trade_ids = _missing_trade_ids(db, loaded.model_id)
-    summary = {"model_id": loaded.model_id, "candidates": len(trade_ids), "written": 0, "failed": 0}
+def backfill_one_model(db, strategy_id: int, model: RegisteredModel, *, dry_run: bool) -> dict:
+    """Score every eligible gap for one model on one strategy. Returns a summary dict."""
+    loaded = model.loaded
+    trade_ids = _missing_trade_ids(db, model.model_id, strategy_id)
+    summary = {
+        "model_id": model.model_id, "strategy_id": strategy_id,
+        "candidates": len(trade_ids), "written": 0, "failed": 0,
+    }
     if not trade_ids:
         return summary
 
-    threshold = loaded.deployment_threshold
+    threshold = model.threshold
     logger.info(
-        "%s: %d signal(s) with no opinion on file (scoring at its own threshold=%.4f)",
-        loaded.model_id, len(trade_ids), threshold,
+        "%s on strategy %s: %d signal(s) with no opinion on file (its own threshold=%.4f)",
+        model.model_id, strategy_id, len(trade_ids), threshold,
     )
     if dry_run:
         return summary
@@ -154,7 +159,7 @@ def backfill_one_model(db, loaded: inf.LoadedModel, *, dry_run: bool) -> dict:
             nan_count = len(_nan_model_features(features))
             pending.append({
                 "trade_id": trade.id,
-                "model_id": loaded.model_id,
+                "model_id": model.model_id,
                 "probability": prob,
                 "decision": decision,
                 "threshold": threshold,
@@ -171,7 +176,7 @@ def backfill_one_model(db, loaded: inf.LoadedModel, *, dry_run: bool) -> dict:
             db.commit()
             summary["written"] += result.rowcount or 0
             pending = []
-        logger.info("%s: %d/%d scored", loaded.model_id, min(start + _BATCH_SIZE, len(trade_ids)), len(trade_ids))
+        logger.info("%s: %d/%d scored", model.model_id, min(start + _BATCH_SIZE, len(trade_ids)), len(trade_ids))
 
     return summary
 
@@ -181,24 +186,29 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true", help="report counts only, write nothing")
     parser.add_argument(
         "--model-id", default=None,
-        help="backfill only this model_id (must be currently loaded as champion or challenger); default: all loaded models",
+        help="backfill only this model_id (must be registered as champion or challenger for a shadow/live strategy); default: every registered model",
     )
     args = parser.parse_args()
 
     settings = get_settings()
     db = SessionLocal()
     try:
-        models = _candidate_models(settings, args.model_id)
-        if not models:
-            logger.error("no models loaded (champion failed and no challengers configured) — nothing to do")
+        targets = _targets(db, settings, args.model_id)
+        if not targets:
+            logger.error("no models registered for any shadow/live strategy — nothing to do")
             return
 
-        results = [backfill_one_model(db, m, dry_run=args.dry_run) for m in models]
+        results = [
+            backfill_one_model(db, sid, m, dry_run=args.dry_run) for sid, m in targets
+        ]
 
         print()
-        print(f"{'model_id':<40} {'candidates':>10} {'written':>8} {'failed':>7}")
+        print(f"{'model_id':<40} {'strat':>5} {'candidates':>10} {'written':>8} {'failed':>7}")
         for r in results:
-            print(f"{r['model_id']:<40} {r['candidates']:>10} {r['written']:>8} {r['failed']:>7}")
+            print(
+                f"{r['model_id']:<40} {r['strategy_id']:>5} {r['candidates']:>10} "
+                f"{r['written']:>8} {r['failed']:>7}"
+            )
         if args.dry_run:
             print("\n(--dry-run: nothing written)")
     finally:

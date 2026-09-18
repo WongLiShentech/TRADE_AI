@@ -180,12 +180,51 @@ def test_pipeline_evaluates_every_active_strategy():
 
     src = inspect.getsource(pipeline)
     assert "active_strategies(db)" in src, "the pipeline does not enumerate strategies"
-    assert "for strategy, engine, s_settings in engines" in src, (
+    assert "for strategy, engine, s_settings, s_models in engines" in src, (
         "the pipeline does not iterate per-strategy engines"
     )
     assert "get_signal_engine(strategy_settings(" in src, (
         "engines are not bound to their strategy's parameters"
     )
+
+
+def test_models_are_bound_to_their_own_strategy():
+    """A model may only score the strategy whose outcomes taught it.
+
+    Labels derive from `rr_actual`, which depends on the EXIT RULE, so a model trained
+    on a trailing corpus is not a valid judge of pure-barrier signals. The live path
+    loaded ONE champion from `ML_MODEL_PATH` and scored every strategy with it, so
+    every cross-model comparison was computed over signals half of which neither model
+    was valid for — a number that looks like evidence and is not.
+    """
+    import inspect
+
+    from app.services import pipeline
+    from app.services.shadow import recorder
+
+    src = inspect.getsource(pipeline)
+    assert "_load_strategy_models(db, settings, st)" in src, (
+        "models are not resolved per strategy"
+    )
+    assert "ML_MODEL_PATH" not in src and "load_challengers" not in src, (
+        "the pipeline still reaches for a global artifact instead of the registry"
+    )
+    rec_src = inspect.getsource(recorder)
+    assert "load_challengers" not in rec_src, (
+        "the recorder still loads a global challenger list rather than the strategy's own"
+    )
+
+
+def test_at_most_one_champion_per_strategy(db):
+    """`is_authoritative` means 'this verdict governed'. Two champions for one strategy
+    would make that claim ambiguous, and the live path would silently pick one."""
+    dupes = db.execute(
+        text(
+            "SELECT strategy_id, count(*) FROM models "
+            "WHERE status = 'champion' GROUP BY 1 HAVING count(*) > 1"
+        )
+    ).all()
+    assert not dupes, f"strategies with more than one champion: {dupes}"
 
 
 def test_pipeline_refuses_more_than_one_live_strategy():

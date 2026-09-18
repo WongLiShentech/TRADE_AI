@@ -163,6 +163,31 @@ def load_model(settings: Settings, *, force_reload: bool = False) -> LoadedModel
     return loaded
 
 
+def load_artifact(path: Path, settings: Settings) -> LoadedModel:
+    """Load, validate and cache the artifact at an explicit path.
+
+    The path-addressed counterpart to :func:`load_model`, which resolves its path from
+    ``ML_MODEL_PATH``. Callers that already know WHICH artifact they want — the strategy
+    registry, resolving a model bound to a strategy — need the loading and the two
+    firewalls without the config indirection.
+
+    Both guards still apply: contract/schema validation on a cache miss, and the
+    unpromoted-artifact safety check on EVERY call, cache hit or not, because that one
+    depends on mutable config rather than on the file.
+
+    Raises:
+        FileNotFoundError: artifact or its metadata sidecar is missing.
+        RuntimeError: contract mismatch, schema mismatch, or the promotion guards refuse.
+    """
+    key = str(path)
+    loaded = _CACHE.get(key)
+    if loaded is None:
+        loaded = _load_from_disk(path)
+        _CACHE[key] = loaded
+    _enforce_safety_guards(loaded, settings)
+    return loaded
+
+
 def load_challengers(settings: Settings) -> list[LoadedModel]:
     """Load every challenger named in ``ML_CHALLENGER_MODEL_PATHS``.
 

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import math
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import func
@@ -158,9 +159,45 @@ def _approved(units: int = 1000, risk_amount: float = 1.0, pip_value: float = 0.
     )
 
 
-def _record(db, settings, inst, signal, features, model, *, t=_T_BASE, risk=None):
+def _as_models(champion, settings, *, challengers=()):
+    """Wrap loaded artifacts into the StrategyModels the recorder now takes.
+
+    Models are resolved from the registry in production (a model is valid only for the
+    strategy whose outcomes taught it). Tests hand the recorder the same shape directly
+    so they exercise the real write path without needing registry rows.
+    """
+    from app.services.ml.registry import RegisteredModel, StrategyModels
+
+    return StrategyModels(
+        champion=(
+            None if champion is None
+            else RegisteredModel(
+                loaded=champion,
+                threshold=float(settings.ML_DECISION_THRESHOLD),
+                is_champion=True,
+            )
+        ),
+        challengers=tuple(
+            RegisteredModel(
+                loaded=c,
+                threshold=float(c.metadata.get("deployment_threshold")
+                                or settings.ML_DECISION_THRESHOLD),
+                is_champion=False,
+            )
+            for c in challengers
+        ),
+    )
+
+
+def _record(db, settings, inst, signal, features, model, *, t=_T_BASE, risk=None,
+            challengers=()):
+    from app.services.ml.registry import StrategyModels
+
+    models = model if isinstance(model, StrategyModels) else _as_models(
+        model, settings, challengers=challengers
+    )
     return rec.record_shadow_decision(
-        db, settings, inst, signal, features, model,
+        db, settings, inst, signal, features, models,
         signal_time=t, risk=risk if risk is not None else _approved(),
     )
 
@@ -598,7 +635,7 @@ def test_pipeline_observe_shadow_records_at_the_live_signal_time(
     from the same chokepoint (and the same T convention) the M7 corpus used."""
     from app.services import pipeline as pl
 
-    status = pl._observe_shadow(db, settings, inst, signal, _approved(), model)
+    status = pl._observe_shadow(db, settings, inst, signal, _approved(), _as_models(model, settings))
 
     assert status == pl.SHADOW_RECORDED
     rows = _live_shadow_rows(db, inst)
@@ -613,8 +650,8 @@ def test_pipeline_observe_shadow_records_at_the_live_signal_time(
 def test_pipeline_observe_shadow_is_idempotent(db, settings, inst, signal, model, live_row_cleanup):
     from app.services import pipeline as pl
 
-    assert pl._observe_shadow(db, settings, inst, signal, _approved(), model) == pl.SHADOW_RECORDED
-    assert pl._observe_shadow(db, settings, inst, signal, _approved(), model) == pl.SHADOW_SKIPPED
+    assert pl._observe_shadow(db, settings, inst, signal, _approved(), _as_models(model, settings)) == pl.SHADOW_RECORDED
+    assert pl._observe_shadow(db, settings, inst, signal, _approved(), _as_models(model, settings)) == pl.SHADOW_SKIPPED
     assert len(_live_shadow_rows(db, inst)) == 1
 
 
@@ -626,29 +663,40 @@ def test_pipeline_observe_shadow_swallows_errors(db, settings, inst, signal, mod
         raise RuntimeError("feature build exploded")
 
     monkeypatch.setattr(pl, "build_features", _boom)
-    assert pl._observe_shadow(db, settings, inst, signal, _approved(), model) == pl.SHADOW_ERROR
+    assert pl._observe_shadow(db, settings, inst, signal, _approved(), _as_models(model, settings)) == pl.SHADOW_ERROR
     assert _shadow_rows(db, inst) == []
 
 
 def test_pipeline_skips_shadow_when_model_is_none(db, settings, inst, signal):
     from app.services import pipeline as pl
 
-    assert pl._observe_shadow(db, settings, inst, signal, _approved(), None) == pl.SHADOW_SKIPPED
+    off = _settings_with(settings, SHADOW_MODE_ENABLED=False)
+    from app.services.ml.registry import StrategyModels
+
+    assert pl._observe_shadow(
+        db, off, inst, signal, _approved(), StrategyModels(None, ())
+    ) == pl.SHADOW_SKIPPED
     assert _shadow_rows(db, inst) == []
 
 
-def test_load_shadow_model_returns_none_when_disabled(settings):
+def test_load_strategy_models_returns_nothing_when_shadow_disabled(db, settings):
     from app.services import pipeline as pl
 
-    assert pl._load_shadow_model(_settings_with(settings, SHADOW_MODE_ENABLED=False)) is None
+    off = _settings_with(settings, SHADOW_MODE_ENABLED=False)
+    got = pl._load_strategy_models(db, off, SimpleNamespace(id=1, name="s"))
+    assert got.champion is None and got.challengers == ()
 
 
-def test_load_shadow_model_never_raises_on_a_bad_artifact(settings, tmp_path):
-    """A model problem disables shadow for the cycle; it never stops the pipeline."""
+def test_load_strategy_models_never_raises_when_the_registry_is_unreachable(settings):
+    """A model problem disables scoring for the cycle; it never stops the pipeline.
+
+    Passing a dead session makes the registry query itself blow up — the failure mode a
+    per-model try/except would NOT catch.
+    """
     from app.services import pipeline as pl
 
-    bad = _settings_with(settings, ML_MODEL_PATH=str(tmp_path / "nope.joblib"))
-    assert pl._load_shadow_model(bad) is None
+    got = pl._load_strategy_models(None, settings, SimpleNamespace(id=1, name="s"))
+    assert got.champion is None and got.challengers == ()
 
 
 # ── 10. D1 refresh gap ───────────────────────────────────────────────────────
@@ -946,8 +994,8 @@ def test_challenger_records_its_own_verdict_without_governing(
     if path is None:
         pytest.skip("no schema-2 artifact available to act as a challenger")
 
-    with_ch = _settings_with(settings, ML_CHALLENGER_MODEL_PATHS=str(path))
-    written = _record(db, with_ch, inst, signal, features, model)
+    challenger = inf.load_artifact(path, settings)
+    written = _record(db, settings, inst, signal, features, model, challengers=(challenger,))
     assert written is not None
 
     rows = db.query(ModelDecision).filter(ModelDecision.trade_id == written.id).all()
@@ -966,24 +1014,38 @@ def test_challenger_records_its_own_verdict_without_governing(
         # Each verdict records the cut-off that actually produced it. Judging a
         # challenger at the champion's threshold would measure the threshold rather
         # than the model — v2's is 0.236 and v3's 0.343.
-        assert authoritative[0].threshold == float(with_ch.ML_DECISION_THRESHOLD)
+        assert authoritative[0].threshold == float(settings.ML_DECISION_THRESHOLD)
         assert challengers[0].model_id != authoritative[0].model_id
+        assert challengers[0].threshold == float(
+            challenger.metadata["deployment_threshold"]
+        ), "a challenger must be judged at its OWN cut-off, not the champion's"
     finally:
         for r in rows:
             db.delete(r)
         db.commit()
 
 
-def test_a_broken_challenger_never_breaks_the_live_path(
-    db, settings, inst, signal, features, model
-):
+def test_a_broken_challenger_never_breaks_the_live_path(db, settings, inst, signal, features):
     """A challenger that will not load is a research inconvenience. The champion still
     has to score the signal and the row still has to be written — otherwise adding a
-    challenger would be strictly more dangerous than not bothering."""
-    from app.models.model_decision import ModelDecision
+    challenger would be strictly more dangerous than not bothering.
 
-    broken = _settings_with(settings, ML_CHALLENGER_MODEL_PATHS="models/does_not_exist.joblib")
-    written = _record(db, broken, inst, signal, features, model)
+    The registry is what drops it now: ``models_for_strategy`` logs the failure and
+    returns the models it COULD load, so a broken row never reaches the recorder.
+    """
+    from app.models.model_decision import ModelDecision
+    from app.services.ml import registry
+
+    missing = registry._load(
+        SimpleNamespace(
+            model_id="does_not_exist", strategy_id=1, status="shadow", decision_threshold=0.3
+        ),
+        settings, is_champion=False,
+    )
+    assert missing is None, "an unloadable artifact must be dropped, not raised"
+
+    champion = inf.load_model(settings)
+    written = _record(db, settings, inst, signal, features, champion)
 
     assert written is not None, "a missing challenger took down the live write path"
     assert written.ml_decision is not None, "the champion's verdict was lost"
@@ -994,3 +1056,32 @@ def test_a_broken_challenger_never_breaks_the_live_path(
         for r in rows:
             db.delete(r)
         db.commit()
+
+
+def test_a_strategy_with_no_champion_records_a_rule_only_row(db, settings, inst, signal, features):
+    """A strategy whose first model is not yet trained must still collect evidence.
+
+    Recording nothing would mean a new strategy is invisible until a model exists — but
+    the signal and its resolved outcome are exactly what that model will be trained on.
+    The row is written with ml_* NULL and no ModelDecision.
+    """
+    from app.models.model_decision import ModelDecision
+    from app.services.ml.registry import StrategyModels
+
+    written = _record(
+        db, settings, inst, signal, features,
+        StrategyModels(champion=None, challengers=()),
+    )
+    try:
+        assert written is not None, "a strategy without a model recorded nothing"
+        assert written.ml_model_id is None
+        assert written.ml_decision is None
+        assert written.ml_probability is None
+        assert written.confluence_score is not None, "the rule's own signal must survive"
+        assert db.query(ModelDecision).filter(
+            ModelDecision.trade_id == written.id
+        ).count() == 0, "no model opined, so no verdict may be recorded"
+    finally:
+        if written is not None:
+            db.delete(written)
+            db.commit()

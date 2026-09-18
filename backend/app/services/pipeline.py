@@ -52,7 +52,7 @@ from app.models.instrument import Instrument
 from app.models.signal import Signal
 from app.services import candle_service, indicator_service
 from app.services.feature_builder import build_features
-from app.services.ml import inference as inf
+from app.services.ml.registry import StrategyModels, models_for_strategy
 from app.services.risk_engine import RiskEngine, RiskValidationError, ValidatedSignal
 from app.services.sandbox import executor as sandbox
 from app.services.shadow import RiskAssessment, live_signal_time, record_shadow_decision
@@ -106,11 +106,10 @@ def run_candle_close_pipeline(granularity: str, settings: Settings) -> dict:
         expired = expire_stale_signals(db)
         summary["expired"] = expired
 
-        # 2. Load the ML artifact ONCE per run (process-cached inside inference).
-        #    A load failure disables shadow observation for this run — it never stops
-        #    the trading pipeline, which does not depend on the model in any way.
-        loaded_model = _load_shadow_model(settings)
-        summary["shadow_enabled"] = loaded_model is not None
+        # 2. Models are resolved PER STRATEGY, below — a model is valid only for the
+        #    strategy whose outcomes taught it, so there is no such thing as "the"
+        #    artifact for a run. Artifacts stay process-cached inside inference, so
+        #    resolving per strategy costs a registry query, not a deserialization.
 
         # 3. Per-instrument pipeline, evaluated once PER ACTIVE STRATEGY.
         #
@@ -145,12 +144,18 @@ def run_candle_close_pipeline(granularity: str, settings: Settings) -> dict:
                 f"is not implemented — set all but one to 'shadow'."
             )
 
+        # Each strategy carries its own engine, its own projected settings, and its own
+        # models. Resolved once per run rather than per instrument: the registry does not
+        # change mid-pass, and a per-instrument query would be 10x the work for the same
+        # answer.
         engines = [
             (st, get_signal_engine(strategy_settings(settings, st)),
-             strategy_settings(settings, st))
+             strategy_settings(settings, st),
+             _load_strategy_models(db, settings, st))
             for st in strategies
         ]
         summary["strategies"] = len(engines)
+        summary["shadow_enabled"] = any(m.champion is not None for _, _, _, m in engines)
 
         for inst in active:
             try:
@@ -160,7 +165,7 @@ def run_candle_close_pipeline(granularity: str, settings: Settings) -> dict:
                 computed = indicator_service.compute_and_store(inst.symbol, granularity, db, settings)
                 summary["computed"] += computed
 
-                for strategy, engine, s_settings in engines:
+                for strategy, engine, s_settings, s_models in engines:
                   # One strategy failing must not cost the others their evaluation of
                   # this bar — they are independent observers of the same market.
                   try:
@@ -215,7 +220,7 @@ def run_candle_close_pipeline(granularity: str, settings: Settings) -> dict:
 
                         # M8-Shadow — ADDITIVE. Never influences the decision above and
                         # never propagates an error into the trading path.
-                        shadow_status = _observe_shadow(db, s_settings, inst, output, risk, loaded_model)
+                        shadow_status = _observe_shadow(db, s_settings, inst, output, risk, s_models)
                         if shadow_status == SHADOW_RECORDED:
                             summary["shadow_recorded"] += 1
                         elif shadow_status == SHADOW_ERROR:
@@ -455,24 +460,25 @@ def _persist_rejected(output: SignalOutput, instrument_id: int, reason: str, db:
 
 
 # ── M8-Shadow wiring (additive; isolated from the trading path) ──────────────
-def _load_shadow_model(settings: Settings) -> Optional[inf.LoadedModel]:
-    """Load the S1 artifact for this run, or ``None`` if shadow mode is off/unloadable.
+def _load_strategy_models(db: Session, settings: Settings, strategy) -> StrategyModels:
+    """The champion and challengers registered for one strategy.
 
-    ``inference.load_model`` fails LOUD on a contract/schema/promotion problem — which
-    is correct for the model, but must not take the rule engine down with it. So the
-    failure is logged and shadow observation is simply skipped for the run.
+    Resolution failures never stop the rule engine: ``models_for_strategy`` already
+    swallows per-model load errors, and anything it cannot handle (a registry query
+    failing outright) degrades to "no models", which records rule-only rows rather than
+    abandoning the strategy's observation of the bar.
     """
     if not settings.SHADOW_MODE_ENABLED:
-        return None
+        return StrategyModels(champion=None, challengers=())
     try:
-        return inf.load_model(settings)
+        return models_for_strategy(db, settings, strategy.id)
     except Exception as exc:  # noqa: BLE001 — model problems never stop live trading
         logger.error(
-            "shadow mode ENABLED but the ML artifact could not be loaded (%s: %s) — "
-            "running WITHOUT shadow observation this cycle",
-            type(exc).__name__, exc,
+            "could not resolve models for strategy %s (%s) (%s: %s) — recording "
+            "rule-only rows this cycle",
+            strategy.id, strategy.name, type(exc).__name__, exc,
         )
-        return None
+        return StrategyModels(champion=None, challengers=())
 
 
 def _observe_shadow(
@@ -481,7 +487,7 @@ def _observe_shadow(
     inst: Instrument,
     output: SignalOutput,
     risk: RiskAssessment,
-    loaded_model: Optional[inf.LoadedModel],
+    models: StrategyModels,
 ) -> str:
     """Build live features and record one shadow row.
 
@@ -494,7 +500,7 @@ def _observe_shadow(
         :data:`SHADOW_RECORDED`, :data:`SHADOW_SKIPPED` or :data:`SHADOW_ERROR`.
         Never raises — the caller's trading decision is already persisted by now.
     """
-    if loaded_model is None:
+    if not settings.SHADOW_MODE_ENABLED:
         return SHADOW_SKIPPED
     try:
         signal_time = live_signal_time(db, inst, output.granularity)
@@ -511,7 +517,7 @@ def _observe_shadow(
         # decision + risk verdict + execution mode, so the row already says truthfully
         # whether an order is about to be sent.
         trade = record_shadow_decision(
-            db, settings, inst, output, features, loaded_model,
+            db, settings, inst, output, features, models,
             signal_time=signal_time, risk=risk,
         )
         # Row exists BEFORE the ticket — a position with no row would be invisible to

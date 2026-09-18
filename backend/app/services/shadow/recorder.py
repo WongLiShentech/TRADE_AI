@@ -101,6 +101,7 @@ from app.models.trade import Trade
 from app.services.feature_builder import FEATURE_KEYS_MODEL, json_safe
 from app.services.ml import inference as inf
 from app.services.ml.inference import LoadedModel
+from app.services.ml.registry import RegisteredModel, StrategyModels
 from app.services.risk_engine import ValidatedSignal
 from app.services.signal_engine.base import SignalOutput
 from app.services.strategy_registry import resolve_active_strategy
@@ -246,7 +247,7 @@ def record_shadow_decision(
     instrument: Instrument,
     signal: SignalOutput,
     features: dict,
-    loaded_model: LoadedModel,
+    models: StrategyModels,
     *,
     signal_time: datetime,
     risk: RiskAssessment,
@@ -260,14 +261,21 @@ def record_shadow_decision(
 
     Args:
         db: SQLAlchemy session (committed on success).
-        settings: config supplying ``SHADOW_MODE_ENABLED``, ``ORDER_PLACEMENT_ENABLED``
-            and ``ML_DECISION_THRESHOLD``.
+        settings: config supplying ``SHADOW_MODE_ENABLED`` and
+            ``ORDER_PLACEMENT_ENABLED``. The decision threshold no longer comes from
+            config — it travels with each model, from the registry.
         instrument: the signalled instrument.
         signal: the rule engine's ``SignalOutput`` (direction/entry/stop/target/score).
         features: the dict returned by ``feature_builder.build_features`` for
             ``signal_time`` — model tier + gated tier + risk payload +
             ``feature_schema_version``. Persisted in full.
-        loaded_model: the validated artifact from ``ml.inference.load_model``.
+        models: the champion and challengers REGISTERED FOR THIS STRATEGY, from
+            ``ml.registry.models_for_strategy``. A model is valid only for the strategy
+            whose outcomes taught it, so the caller resolves them per strategy rather
+            than the recorder reaching for a global. ``champion`` may be None — a
+            strategy whose first model is not yet trained records rule-only rows, which
+            is strictly better than recording nothing: the signal and its outcome are
+            evidence whether or not a model had an opinion on it.
         signal_time: T, from :func:`live_signal_time` — becomes ``trades.opened_at``
             and is half of the idempotency natural key.
         risk: the live RiskEngine verdict for this signal.
@@ -311,7 +319,19 @@ def record_shadow_decision(
 
     nan_keys = _nan_model_features(features)
     _warn_if_degraded(settings, instrument, signal_time, nan_keys)
-    decision, ml_error = _score_safely(loaded_model, features, settings)
+
+    # The champion's verdict is the one that GOVERNS: mirrored into trades.ml_*, and —
+    # once orders are enabled — the one that decides whether a ticket is sent. It scores
+    # at its own registered cut-off, not a global one, because the threshold is part of
+    # this model's calibration.
+    champion = models.champion
+    if champion is not None:
+        decision, ml_error = _score_safely(
+            champion.loaded, features, settings, threshold=champion.threshold
+        )
+    else:
+        # No model registered for this strategy yet. Record the rule's signal anyway.
+        decision, ml_error = None, None
 
     # Which stage this row belongs to. Derived HERE because this is the only point
     # that holds the decision, the risk verdict and the execution mode together —
@@ -347,14 +367,14 @@ def record_shadow_decision(
         opened_at=signal_time,
         closed_at=None,        # Phase 3
         signal_reasoning=_build_reasoning(
-            features, signal, settings, loaded_model, signal_time, risk, ml_error, nan_keys
+            features, signal, settings, champion, signal_time, risk, ml_error, nan_keys
         ),
         confluence_score=signal.confidence_score,
         session=_session_of(features),
         stop_method=STOP_METHOD_ATR,
         ml_probability=decision.probability if decision is not None else None,
         ml_decision=decision.decision if decision is not None else None,
-        ml_model_id=loaded_model.model_id,
+        ml_model_id=champion.model_id if champion is not None else None,
     )
     db.add(trade)
     try:
@@ -378,19 +398,24 @@ def record_shadow_decision(
     # is_authoritative marks the verdict that actually GOVERNED this row (the one
     # whose take/skip is mirrored into trades.ml_*). Exactly one per trade.
     verdicts = []
-    if decision is not None:
-        verdicts.append((loaded_model, decision, True))
+    if decision is not None and champion is not None:
+        verdicts.append((champion, decision))
 
     # Challengers score the SAME signal and record their opinion — never touching
     # trades.ml_*, never changing take/skip, never able to cause an order. Identical
     # evidence is what makes the comparison meaningful, and being free of consequence
     # is what makes running one worth doing.
-    for challenger in inf.load_challengers(settings):
+    #
+    # They come from the STRATEGY's registry entry, not from a global list: a challenger
+    # is a candidate to replace THIS strategy's champion, so it must have been trained on
+    # THIS strategy's outcomes. A model scoring a strategy it was not trained for produces
+    # a number that looks like evidence and is not.
+    for challenger in models.challengers:
         ch_decision, ch_error = _score_safely(
-            challenger, features, settings,
+            challenger.loaded, features, settings,
             # Its own cut-off, selected on its own validation tail. Scoring it at the
             # champion's would measure the threshold rather than the model.
-            threshold=getattr(challenger, "deployment_threshold", None),
+            threshold=challenger.threshold,
         )
         if ch_decision is None:
             logger.warning(
@@ -398,29 +423,21 @@ def record_shadow_decision(
                 challenger.model_id, instrument.symbol, signal_time, ch_error,
             )
             continue
-        verdicts.append((challenger, ch_decision, False))
+        verdicts.append((challenger, ch_decision))
 
-    for model, verdict, authoritative in verdicts:
+    for model, verdict in verdicts:
         db.add(ModelDecision(
             trade_id=trade.id,
             model_id=model.model_id,
             probability=verdict.probability,
             decision=verdict.decision,
-            # The model's OWN deployment threshold, not the global setting: a
-            # challenger trained on different data has its own cut-off, and comparing
-            # two models through one threshold would measure the threshold rather than
-            # the models. Falls back to the global one when the artifact carries none.
-            # The cut-off that ACTUALLY governed this verdict. For the champion that
-            # is the configured value (what the live system applied); for a challenger
-            # it is the artifact's own. Recording a probability without the threshold
-            # it was compared against makes the verdict unreproducible later.
-            threshold=float(
-                settings.ML_DECISION_THRESHOLD if authoritative
-                else (getattr(model, "deployment_threshold", None)
-                      or settings.ML_DECISION_THRESHOLD)
-            ),
+            # The cut-off that ACTUALLY governed this verdict, carried on the model
+            # itself — the registry's value, or the artifact's own when the row states
+            # none. Recording a probability without the threshold it was compared
+            # against makes the verdict unreproducible later.
+            threshold=model.threshold,
             nan_features=len(nan_keys),
-            is_authoritative=authoritative,
+            is_authoritative=model.is_champion,
         ))
     if verdicts:
         db.commit()
@@ -429,9 +446,11 @@ def record_shadow_decision(
         "shadow recorded: %s %s %s p=%s decision=%s risk=%s model=%s nan_model_features=%d",
         instrument.symbol, signal.granularity, signal.direction,
         f"{decision.probability:.4f}" if decision is not None else "n/a",
-        decision.decision if decision is not None else f"ERROR({ml_error})",
+        decision.decision if decision is not None else (
+            "rule-only" if champion is None else f"ERROR({ml_error})"
+        ),
         "pass" if risk.passed else f"reject:{risk.rejection_reason}",
-        loaded_model.model_id, len(nan_keys),
+        champion.model_id if champion is not None else "none", len(nan_keys),
     )
     return trade
 
@@ -592,7 +611,7 @@ def _build_reasoning(
     features: dict,
     signal: SignalOutput,
     settings: Settings,
-    loaded_model: LoadedModel,
+    champion: Optional[RegisteredModel],
     signal_time: datetime,
     risk: RiskAssessment,
     ml_error: Optional[str],
@@ -625,8 +644,8 @@ def _build_reasoning(
                 NAN_MODEL_FEATURE_KEYS_KEY: nan_keys,
                 # ML provenance (mirrors the ml_* columns; kept here so a JSON-only
                 # export of the corpus is self-describing).
-                "ml_model_id": loaded_model.model_id,
-                "ml_decision_threshold": float(settings.ML_DECISION_THRESHOLD),
+                "ml_model_id": champion.model_id if champion is not None else None,
+                "ml_decision_threshold": champion.threshold if champion is not None else None,
                 "ml_error": ml_error,
             },
         }
