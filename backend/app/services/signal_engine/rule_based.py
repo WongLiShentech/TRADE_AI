@@ -37,8 +37,8 @@ from app.models.candle import Candle
 from app.models.indicator import Indicator
 from app.models.instrument import Instrument
 from app.models.signal import Signal
+from app.domain.conditions import ConditionContext, enabled_conditions
 from app.services.price_stream import get_latest_price
-from app.services.session_classifier import classify_session
 from app.services.signal_engine.base import SignalEngine, SignalOutput
 
 logger = logging.getLogger(__name__)
@@ -155,11 +155,21 @@ class RuleBasedSignalEngine(SignalEngine):
             .order_by(Indicator.timestamp.desc())
             .first()
         )
-        if latest_ind is None or latest_ind.atr14 is None or latest_ind.rsi14 is None:
-            logger.debug("evaluate %s: missing ATR/RSI indicator", instrument)
+        # `atr14` is required unconditionally — the ENGINE needs it for stop geometry,
+        # whatever conditions are enabled. Everything else is required only if some
+        # enabled condition declares it, so a newly added (nullable, not-yet-backfilled)
+        # indicator column cannot veto every bar for conditions that never read it.
+        required = {"atr14"}
+        for cond in enabled_conditions(settings):
+            required.update(cond.required_indicators)
+        if latest_ind is None:
+            logger.debug("evaluate %s: no indicator row", instrument)
+            return None
+        missing = sorted(k for k in required if getattr(latest_ind, k, None) is None)
+        if missing:
+            logger.debug("evaluate %s: indicator row lacks %s", instrument, missing)
             return None
         atr14 = latest_ind.atr14
-        rsi14 = latest_ind.rsi14
 
         # ── Load D1 trend ────────────────────────────────────────────────────
         # `as_of` forward-fills: the latest CLOSED D1 row <= T is used (D1 lags H4
@@ -203,68 +213,36 @@ class RuleBasedSignalEngine(SignalEngine):
                 return None
             quote_bid, quote_ask = tick.bid, tick.ask
 
-        # ── Common conditions ────────────────────────────────────────────────
-        session = classify_session(now_utc)
-        allowed_sessions = {s.strip().lower() for s in settings.SIGNAL_SESSION_FILTER.split(",") if s.strip()}
-        c4_session_ok = session in allowed_sessions
-
-        spread = quote_ask - quote_bid
-        spread_pips = spread / inst.pip_size if inst.pip_size else float("inf")
-        c5_spread_ok = spread_pips < settings.SIGNAL_MAX_SPREAD_PIPS
-
-        # ── C3 structure: Donchian channel, NOT swing pivots ──────────────────
-        # This previously read `swing_high`/`swing_low` off the newest 20 indicator
-        # rows. Those come from a CENTRED window, so the value at bar i is decided by
-        # bars up to i+k — unknowable at i. With SWING_LOOKBACK_PERIODS = 20 and this
-        # query's old `.limit(20)`, the rows read here were EXACTLY the rows
-        # feature_builder.causal_swing_levels discards as unusable (LEAK-1): total
-        # look-ahead in backtest, and a condition that could never fire live (measured:
-        # c3_structure true on 20.0% of backtest rows and 0.0% of live rows).
-        #
-        # A Donchian extreme over a trailing window including the current bar is
-        # knowable at its own close, so the same "is price at structure?" question is
-        # answered causally. `donchian_*` is on the SAME indicator row already loaded
-        # above — no extra query.
-        donchian_high = latest_ind.donchian_high
-        donchian_low = latest_ind.donchian_low
-
-        atr_buffer = settings.SIGNAL_STRUCTURE_ATR_BUFFER * atr14
-
-        # ── Score BUY ────────────────────────────────────────────────────────
-        buy_c1_trend = d1_last_close > d1_sma
-        buy_c2_rsi = settings.SIGNAL_RSI_OVERSOLD <= rsi14 <= settings.SIGNAL_RSI_OVERBOUGHT
-        # Distance from the trailing N-bar low, in ATR units. A NULL channel means
-        # "not computed for this bar" (pre-backfill, or inside the warmup) and must read
-        # as False — an unevaluable condition is never a satisfied one.
-        buy_c3_structure = (
-            donchian_low is not None
-            and (latest_h4.close - donchian_low) <= atr_buffer
+        # ── Score both directions from the condition registry ────────────────
+        # The conditions themselves live in `app/domain/conditions`. This method no
+        # longer knows what they ARE — only how to assemble their inputs once and how to
+        # combine their answers. Adding a condition is a registry entry plus a name in
+        # SIGNAL_CONDITIONS, with no edit here and no second list to keep in sync (the
+        # feature builder derives its payload keys from the same registry).
+        ctx = ConditionContext(
+            instrument=inst,
+            granularity=granularity,
+            now_utc=now_utc,
+            settings=settings,
+            bars=h4_candles,
+            trend_bars=d1_candles,
+            indicators=latest_ind,
+            quote_bid=quote_bid,
+            quote_ask=quote_ask,
+            trend_close=d1_last_close,
+            trend_sma=d1_sma,
         )
-        buy_breakdown = {
-            "trend": buy_c1_trend,
-            "rsi": buy_c2_rsi,
-            "structure": buy_c3_structure,
-            "session": c4_session_ok,
-            "spread": c5_spread_ok,
-        }
+        active = enabled_conditions(settings)
+
+        # NOTE: every enabled condition is scored, GATE or VOTE. That preserves today's
+        # behaviour exactly — `session` and `spread` still contribute to the score even
+        # though the registry correctly declares them direction-independent. Honouring
+        # `role` (gates veto, only votes score) is the next change, and it is what fixes
+        # the ambiguity defect: scored as votes these two give both directions the same
+        # 2 points, so at a threshold of 2 EVERY bar satisfies BUY and SELL at once.
+        buy_breakdown = {c.key: bool(c.evaluate(ctx, "BUY")) for c in active}
+        sell_breakdown = {c.key: bool(c.evaluate(ctx, "SELL")) for c in active}
         buy_score = sum(1 for v in buy_breakdown.values() if v)
-
-        # ── Score SELL ───────────────────────────────────────────────────────
-        sell_c1_trend = d1_last_close < d1_sma
-        sell_c2_rsi = (
-            settings.SIGNAL_RSI_OVERSOLD_SELL <= rsi14 <= settings.SIGNAL_RSI_OVERBOUGHT_SELL
-        )
-        sell_c3_structure = (
-            donchian_high is not None
-            and (donchian_high - latest_h4.close) <= atr_buffer
-        )
-        sell_breakdown = {
-            "trend": sell_c1_trend,
-            "rsi": sell_c2_rsi,
-            "structure": sell_c3_structure,
-            "session": c4_session_ok,
-            "spread": c5_spread_ok,
-        }
         sell_score = sum(1 for v in sell_breakdown.values() if v)
 
         threshold = settings.SIGNAL_MIN_CONFLUENCE_SCORE

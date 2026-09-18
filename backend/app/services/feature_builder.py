@@ -86,6 +86,7 @@ from app.models.indicator import Indicator
 from app.models.instrument import Instrument
 from app.models.macro_data import MacroData
 from app.models.news_calendar_event import NewsCalendarEvent
+from app.domain.conditions import CONDITIONS, CONDITIONS_BY_KEY, LEGACY_CONFLUENCE_KEYS
 from app.services.session_classifier import classify_session
 
 FEATURE_SCHEMA_VERSION = 3
@@ -146,29 +147,20 @@ FEATURE_KEYS_GATED: list[str] = [
 ]
 
 # RISK PAYLOAD — stored for RiskEngine / audit, never a model input.
-PAYLOAD_KEYS: list[str] = [
+#
+# The condition booleans are DERIVED from the condition registry rather than restated
+# here. They used to be a hand-copied list, and the loop below iterated THAT list rather
+# than the breakdown it was handed — so a sixth condition would have influenced the trade
+# while being silently absent from the feature row, with nothing to catch the divergence.
+_PRICE_PAYLOAD_KEYS: list[str] = [
     "atr14",
     "h4_close",
     "d1_close",
     "d1_sma50",
-    "c1_trend",
-    "c2_rsi",
-    "c3_structure",
-    "c4_session",
-    "c5_spread",
 ]
+PAYLOAD_KEYS: list[str] = _PRICE_PAYLOAD_KEYS + [c.payload_key for c in CONDITIONS]
 
 _ALL_KEYS: set[str] = set(FEATURE_KEYS_MODEL + FEATURE_KEYS_GATED + PAYLOAD_KEYS)
-
-# confluence dict keys (as emitted by RuleBasedSignalEngine.score_breakdown) → the
-# stored c1..c5 payload booleans. Single mapping so both stay in lock-step.
-_CONFLUENCE_TO_PAYLOAD: dict[str, str] = {
-    "trend": "c1_trend",
-    "rsi": "c2_rsi",
-    "structure": "c3_structure",
-    "session": "c4_session",
-    "spread": "c5_spread",
-}
 
 # Contract-indicator features, resolved by ROLE via the registry (consistent with
 # the rate features' currency/role resolution — never a hardcoded series-name
@@ -223,10 +215,23 @@ def build_features(
     features["feature_schema_version"] = FEATURE_SCHEMA_VERSION
 
     # ── confluence (input) ───────────────────────────────────────────────────
-    for src_key, payload_key in _CONFLUENCE_TO_PAYLOAD.items():
-        features[payload_key] = bool(confluence.get(src_key, False))
+    # A key the registry does not know is a HARD ERROR, not a shrug. The engine and this
+    # builder derive from one registry, so an unrecognised key means they have diverged —
+    # and a silently dropped condition is one that steers trades while being invisible to
+    # every model trained on the rows.
+    unknown = sorted(set(confluence) - set(CONDITIONS_BY_KEY))
+    if unknown:
+        raise RuntimeError(
+            f"score_breakdown carries unregistered conditions {unknown}. Register them in "
+            f"app/domain/conditions so the engine and the feature contract stay in step."
+        )
+    for cond in CONDITIONS:
+        features[cond.payload_key] = bool(confluence.get(cond.key, False))
+    # Pinned to the LEGACY five, forever: `confluence_score` is a model-tier feature, so
+    # changing what it counts changes the meaning of a name every existing corpus uses.
+    # New conditions are recorded in the payload tier and promoted deliberately.
     features["confluence_score"] = sum(
-        1 for k in _CONFLUENCE_TO_PAYLOAD if bool(confluence.get(k, False))
+        1 for k in LEGACY_CONFLUENCE_KEYS if bool(confluence.get(k, False))
     )
 
     # ── price / indicator core (payload + derived) ───────────────────────────

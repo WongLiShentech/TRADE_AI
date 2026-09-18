@@ -236,17 +236,40 @@ def test_an_rsi_in_the_band_overlap_satisfies_both_directions(db, settings, rig)
     )
 
 
-def test_session_and_spread_are_direction_independent(db, settings, rig):
-    """The property behind the ambiguity bug, pinned so Stage 2 can be proven to fix it.
+def test_gate_conditions_answer_identically_for_both_directions(db, settings, rig):
+    """The property behind the ambiguity bug, asserted rather than assumed.
 
-    C4 and C5 score identically for BUY and SELL, so they contribute the same 2 points to
-    both sides. That is why lowering SIGNAL_MIN_CONFLUENCE_SCORE to 2 made every bar
-    ambiguous and suppressed the signal instead of loosening the rule.
+    Every condition the registry declares a GATE must return the same answer for BUY and
+    SELL — that is what "direction-independent" means, and it is why scoring them as
+    votes hands both sides the same 2 points. At a threshold of 2 that alone satisfies
+    both directions, every bar is ambiguous, and the rule fires only where a gate FAILED.
+
+    Checked behaviourally, by evaluating the real callables, rather than by matching
+    source text: the property is about what the conditions DO, and it has to keep holding
+    after Stage 2 moves where they are consumed.
     """
-    from app.services.signal_engine import rule_based
+    from app.domain.conditions import Role, enabled_conditions
+    from app.domain.conditions.spec import ConditionContext
+    from app.models.candle import Candle as _C
 
-    src = __import__("inspect").getsource(rule_based)
-    assert '"session": c4_session_ok' in src and '"spread": c5_spread_ok' in src, (
-        "session/spread are no longer shared verbatim between the two breakdowns — if "
-        "they became directional, this test's premise (and Stage 2's) needs revisiting"
+    inst, bar = rig
+    row = db.query(Indicator).filter_by(instrument_id=inst.id, granularity=_GRAN).one()
+    bars = (
+        db.query(_C).filter_by(instrument_id=inst.id, granularity=_GRAN, price_type="M")
+        .order_by(_C.timestamp.asc()).all()
     )
+    ctx = ConditionContext(
+        instrument=inst, granularity=_GRAN,
+        now_utc=bar.timestamp + _BAR + timedelta(seconds=1),
+        settings=settings, bars=bars, trend_bars=[], indicators=row,
+        quote_bid=bar.close - _PIP / 2, quote_ask=bar.close + _PIP / 2,
+        trend_close=None, trend_sma=None,
+    )
+
+    declared_gates = [c for c in enabled_conditions(settings) if c.role is Role.GATE]
+    assert declared_gates, "no gates are declared — Stage 2 has nothing to separate"
+    for cond in declared_gates:
+        assert cond.evaluate(ctx, "BUY") == cond.evaluate(ctx, "SELL"), (
+            f"condition '{cond.key}' is declared a GATE but answers differently per "
+            f"direction — it is a VOTE and the registry is wrong"
+        )

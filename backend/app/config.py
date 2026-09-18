@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     SIGNAL_RSI_OVERBOUGHT_SELL: float
     SIGNAL_TREND_SMA_PERIOD: int
     SIGNAL_STRUCTURE_ATR_BUFFER: float
+    SIGNAL_CONDITIONS: str  # comma list naming which registered conditions this strategy evaluates
     SIGNAL_MAX_SPREAD_PIPS: float
     SIGNAL_SESSION_FILTER: str               # comma-separated, parsed in engine
     SIGNAL_GRANULARITIES: str                # comma-separated
