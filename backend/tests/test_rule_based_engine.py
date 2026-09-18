@@ -209,31 +209,94 @@ def test_spread_gate_uses_the_quote_not_the_candle(db, settings, rig):
         )
 
 
-def test_an_rsi_in_the_band_overlap_satisfies_both_directions(db, settings, rig):
-    """The RSI bands overlap, and inside that overlap C2 is effectively direction-blind.
+def test_an_rsi_in_the_band_overlap_no_longer_suppresses_a_clear_signal(db, settings, rig):
+    """An overlapping RSI band must cost one vote, not the whole signal.
 
-    Configured: BUY 40-55, SELL 45-60. An RSI in 45-55 satisfies both. Combined with C4
-    and C5 — which are shared verbatim — SELL reaches 3 of 5 on session + spread + rsi
-    alone, with no directional evidence whatsoever, and the ambiguity guard then
-    suppresses a signal the BUY side had genuinely earned 5 points for.
+    Configured: BUY 40-55, SELL 45-60, so an RSI in 45-55 satisfies C2 for BOTH
+    directions. Under the old arithmetic that was fatal — session + spread already gave
+    each side 2 points, the shared RSI took both to 3, both "passed" the threshold of 3,
+    and the ambiguity guard discarded a bar on which BUY had genuine directional evidence
+    and SELL had none.
 
-    This is the same family as the session/spread defect and it is a second reason
-    Stage 2 must score only directional conditions. Pinned here so the property is
-    recorded rather than rediscovered.
+    With gates as vetoes the shared points are gone: SELL is left holding only the RSI
+    vote while BUY holds trend + rsi + structure, the margin is decisive, and the signal
+    survives. The overlap is now a mild loss of discrimination rather than a suppressor.
     """
     inst, bar = rig
     lo_sell, hi_buy = settings.SIGNAL_RSI_OVERSOLD_SELL, settings.SIGNAL_RSI_OVERBOUGHT
     if lo_sell > hi_buy:
-        pytest.skip("RSI bands no longer overlap — the defect this pins is gone")
+        pytest.skip("RSI bands no longer overlap — nothing to assert")
 
     row = db.query(Indicator).filter_by(instrument_id=inst.id, granularity=_GRAN).one()
     row.rsi14 = (lo_sell + hi_buy) / 2      # inside BOTH bands
     db.commit()
 
-    assert _evaluate(db, settings, bar) is None, (
-        "a bar whose RSI satisfies both directions still produced a signal — either the "
-        "ambiguity guard changed or the bands stopped overlapping"
+    out = _evaluate(db, settings, bar)
+    assert out is not None, (
+        "a shared RSI still suppressed a signal with a clear directional margin — the "
+        "gates are back in the score"
     )
+    assert out.direction == "BUY", out.score_breakdown
+    assert out.score_breakdown["rsi"] is True
+
+
+def test_gates_cannot_satisfy_both_directions(db, settings, rig):
+    """The ambiguity defect, proven structurally gone.
+
+    Construct the exact bar that broke the old arithmetic: both gates pass and NO
+    directional condition holds for either side. Under the old scheme session + spread
+    scored 2 for BUY and 2 for SELL, so at a threshold of 2 both directions "passed",
+    the ambiguity guard fired, and the signal was discarded — which is why lowering the
+    threshold produced FEWER signals, and only on bars where a gate had failed.
+
+    Now gates are vetoes and only votes score, so two direction-blind conditions cannot
+    manufacture a passing score for anybody.
+    """
+    inst, bar = rig
+
+    # Kill every directional condition: RSI outside both bands, channel far away. Trend
+    # still resolves one way or the other, so allow for exactly one surviving vote.
+    row = db.query(Indicator).filter_by(instrument_id=inst.id, granularity=_GRAN).one()
+    row.rsi14 = max(settings.SIGNAL_RSI_OVERBOUGHT, settings.SIGNAL_RSI_OVERBOUGHT_SELL) + 10
+    far = 50 * settings.SIGNAL_STRUCTURE_ATR_BUFFER * 0.0020
+    row.donchian_low = bar.close - far
+    row.donchian_high = bar.close + far
+    db.commit()
+
+    out = _evaluate(db, settings, bar)   # gates both pass; at most 1 directional vote
+
+    if settings.SIGNAL_MIN_DIRECTIONAL_VOTES > 1:
+        assert out is None, (
+            "gates alone produced a signal — they are still being scored as votes"
+        )
+    if out is not None:
+        votes_true = sum(
+            1 for c in _vote_conditions(settings) if out.score_breakdown.get(c.key)
+        )
+        assert votes_true >= settings.SIGNAL_MIN_DIRECTIONAL_VOTES, (
+            f"signal fired on {votes_true} directional votes, below the configured "
+            f"minimum {settings.SIGNAL_MIN_DIRECTIONAL_VOTES} — gates are leaking into "
+            f"the score"
+        )
+
+
+def test_a_failed_gate_vetoes_however_good_the_setup(db, settings, rig):
+    """A gate failure must reject outright, not be outvoted.
+
+    Before, a bar with all three directional conditions true still scored 3 and fired
+    even with the session or spread gate false. That is a trade taken in a session the
+    configuration excludes, or at a spread it rejects.
+    """
+    _, bar = rig
+    wide = settings.SIGNAL_MAX_SPREAD_PIPS * 10
+    assert _evaluate(db, settings, bar, spread_pips=wide) is None, (
+        "a signal fired through a blown spread gate — gates are not vetoing"
+    )
+
+
+def _vote_conditions(settings):
+    from app.domain.conditions import votes
+    return votes(settings)
 
 
 def test_gate_conditions_answer_identically_for_both_directions(db, settings, rig):

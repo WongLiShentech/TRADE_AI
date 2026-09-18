@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     SIGNAL_TREND_SMA_PERIOD: int
     SIGNAL_STRUCTURE_ATR_BUFFER: float
     SIGNAL_CONDITIONS: str  # comma list naming which registered conditions this strategy evaluates
+    SIGNAL_MIN_DIRECTIONAL_VOTES: int  # VOTE-role conditions required; gates are vetoes, never scored
+    SIGNAL_MIN_VOTE_MARGIN: int        # BUY/SELL vote gap required; below it the bar is ambiguous
     SIGNAL_MAX_SPREAD_PIPS: float
     SIGNAL_SESSION_FILTER: str               # comma-separated, parsed in engine
     SIGNAL_GRANULARITIES: str                # comma-separated

@@ -37,7 +37,7 @@ from app.models.candle import Candle
 from app.models.indicator import Indicator
 from app.models.instrument import Instrument
 from app.models.signal import Signal
-from app.domain.conditions import ConditionContext, enabled_conditions
+from app.domain.conditions import ConditionContext, enabled_conditions, gates, votes
 from app.services.price_stream import get_latest_price
 from app.services.signal_engine.base import SignalEngine, SignalOutput
 
@@ -232,47 +232,63 @@ class RuleBasedSignalEngine(SignalEngine):
             trend_close=d1_last_close,
             trend_sma=d1_sma,
         )
-        active = enabled_conditions(settings)
-
-        # NOTE: every enabled condition is scored, GATE or VOTE. That preserves today's
-        # behaviour exactly — `session` and `spread` still contribute to the score even
-        # though the registry correctly declares them direction-independent. Honouring
-        # `role` (gates veto, only votes score) is the next change, and it is what fixes
-        # the ambiguity defect: scored as votes these two give both directions the same
-        # 2 points, so at a threshold of 2 EVERY bar satisfies BUY and SELL at once.
-        buy_breakdown = {c.key: bool(c.evaluate(ctx, "BUY")) for c in active}
-        sell_breakdown = {c.key: bool(c.evaluate(ctx, "SELL")) for c in active}
-        buy_score = sum(1 for v in buy_breakdown.values() if v)
-        sell_score = sum(1 for v in sell_breakdown.values() if v)
-
-        threshold = settings.SIGNAL_MIN_CONFLUENCE_SCORE
-
-        buy_pass = buy_score >= threshold
-        sell_pass = sell_score >= threshold
-
-        if buy_pass and sell_pass:
-            logger.debug("evaluate %s: ambiguous (buy=%d sell=%d)", instrument, buy_score, sell_score)
+        # ── Gates: a hard veto, evaluated BEFORE any scoring ──────────────────
+        # Direction-independent conditions answer identically for BUY and SELL, so
+        # scoring them handed both sides the same points. At a threshold of 2 that alone
+        # satisfied both directions on every bar, the ambiguity guard discarded the lot,
+        # and the only signals that survived were ones where a gate had FAILED —
+        # measured: spread OK on 53.9% of those trades against 80.3% for the tight rule,
+        # i.e. "loosening" the rule selected for WORSE execution conditions.
+        #
+        # As vetoes they say what they mean: no session, no spread, no trade — however
+        # good the setup looks.
+        gate_results = {c.key: bool(c.evaluate(ctx, None)) for c in gates(settings)}
+        failed_gates = [k for k, ok in gate_results.items() if not ok]
+        if failed_gates:
+            logger.debug("evaluate %s: gate(s) failed %s", instrument, failed_gates)
             return None
-        if not buy_pass and not sell_pass:
+
+        # ── Votes: the only thing that scores ─────────────────────────────────
+        vote_conditions = votes(settings)
+        buy_votes = {c.key: bool(c.evaluate(ctx, "BUY")) for c in vote_conditions}
+        sell_votes = {c.key: bool(c.evaluate(ctx, "SELL")) for c in vote_conditions}
+        buy_score = sum(1 for v in buy_votes.values() if v)
+        sell_score = sum(1 for v in sell_votes.values() if v)
+
+        min_votes = settings.SIGNAL_MIN_DIRECTIONAL_VOTES
+        if max(buy_score, sell_score) < min_votes:
             logger.debug("evaluate %s: below threshold (buy=%d sell=%d, min=%d)",
-                         instrument, buy_score, sell_score, threshold)
+                         instrument, buy_score, sell_score, min_votes)
+            return None
+
+        # Tie-break by MARGIN rather than by strict inequality: a 3-1 split is a genuine
+        # directional read, a 2-2 split is the market disagreeing with itself. Requiring
+        # a margin says how much disagreement is tolerable instead of leaving it at "any
+        # difference at all".
+        if abs(buy_score - sell_score) < settings.SIGNAL_MIN_VOTE_MARGIN:
+            logger.debug("evaluate %s: ambiguous (buy=%d sell=%d, min_margin=%d)",
+                         instrument, buy_score, sell_score, settings.SIGNAL_MIN_VOTE_MARGIN)
             return None
 
         stop_distance = settings.SIGNAL_STOP_ATR_MULTIPLIER * atr14
-        if buy_pass:
+        if buy_score > sell_score:
             direction = "BUY"
             entry = quote_ask
             stop = entry - stop_distance
             target = entry + settings.MIN_RR_RATIO * stop_distance
-            breakdown = buy_breakdown
-            score = buy_score
+            breakdown = {**gate_results, **buy_votes}
+            votes_for_direction = buy_score
         else:
             direction = "SELL"
             entry = quote_bid
             stop = entry + stop_distance
             target = entry - settings.MIN_RR_RATIO * stop_distance
-            breakdown = sell_breakdown
-            score = sell_score
+            breakdown = {**gate_results, **sell_votes}
+            votes_for_direction = sell_score
+
+        # Gates all passed to reach here, so this equals the legacy 5-of-5 count and
+        # `trades.confluence_score` keeps meaning what it always did.
+        score = len(gate_results) + votes_for_direction
 
         return SignalOutput(
             instrument=instrument,

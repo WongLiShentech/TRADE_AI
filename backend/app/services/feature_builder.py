@@ -86,7 +86,7 @@ from app.models.indicator import Indicator
 from app.models.instrument import Instrument
 from app.models.macro_data import MacroData
 from app.models.news_calendar_event import NewsCalendarEvent
-from app.domain.conditions import CONDITIONS, CONDITIONS_BY_KEY, LEGACY_CONFLUENCE_KEYS
+from app.domain.conditions import CONDITIONS, CONDITIONS_BY_KEY, LEGACY_CONFLUENCE_KEYS, Role
 from app.services.session_classifier import classify_session
 
 FEATURE_SCHEMA_VERSION = 3
@@ -144,6 +144,13 @@ FEATURE_KEYS_GATED: list[str] = [
     "news_high_impact_next_8h",
     "news_high_impact_last_4h",
     "news_high_impact_last_8h",
+    # Once gates are vetoes, `confluence_score` is always len(gates) + votes, so it no
+    # longer tells you how much DIRECTIONAL evidence a signal had. These do, and they are
+    # gated rather than model-tier deliberately: `confluence_score` stays the pinned
+    # model input, and promoting `directional_votes` is a later, evidence-led decision at
+    # a schema bump rather than a side effect of this change.
+    "directional_votes",
+    "gates_passed",
 ]
 
 # RISK PAYLOAD — stored for RiskEngine / audit, never a model input.
@@ -232,6 +239,14 @@ def build_features(
     # New conditions are recorded in the payload tier and promoted deliberately.
     features["confluence_score"] = sum(
         1 for k in LEGACY_CONFLUENCE_KEYS if bool(confluence.get(k, False))
+    )
+    # Derived from the registry rather than passed in, so the engine keeps ONE output
+    # shape and these cannot disagree with the breakdown they describe.
+    features["directional_votes"] = sum(
+        1 for c in CONDITIONS if c.role is Role.VOTE and bool(confluence.get(c.key, False))
+    )
+    features["gates_passed"] = all(
+        bool(confluence.get(c.key, False)) for c in CONDITIONS if c.role is Role.GATE
     )
 
     # ── price / indicator core (payload + derived) ───────────────────────────

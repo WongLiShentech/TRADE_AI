@@ -69,7 +69,7 @@ def test_contract_v3_exact_tiers():
     """
     assert FEATURE_SCHEMA_VERSION == 3
     assert len(FEATURE_KEYS_MODEL) == 19, FEATURE_KEYS_MODEL
-    assert len(FEATURE_KEYS_GATED) == 10, FEATURE_KEYS_GATED
+    assert len(FEATURE_KEYS_GATED) == 12, FEATURE_KEYS_GATED
     assert len(PAYLOAD_KEYS) == 9, PAYLOAD_KEYS
 
     assert set(FEATURE_KEYS_MODEL) == {
@@ -82,6 +82,11 @@ def test_contract_v3_exact_tiers():
     assert set(FEATURE_KEYS_GATED) == {
         "us_10y", "eu_cpi_yoy", "yield_differential_change_3m", "us_cpi_yoy",
         "us_unemployment_change", "us_retail_sales_mom",
+        # Gates became vetoes, so confluence_score is always len(gates) + votes and no
+        # longer reports DIRECTIONAL evidence. These do — gated rather than model-tier on
+        # purpose: confluence_score stays the pinned model input, and promoting
+        # directional_votes is a later decision made with evidence, not a side effect.
+        "directional_votes", "gates_passed",
         *_NEWS_KEYS,
     }
     # Tiers are disjoint and the moved keys landed on the correct side.
