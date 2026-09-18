@@ -12,6 +12,8 @@ class IndicatorRead(BaseModel):
     rsi14: float | None
     swing_high: float | None
     swing_low: float | None
+    donchian_high: float | None
+    donchian_low: float | None
 
     model_config = {"from_attributes": True}
 

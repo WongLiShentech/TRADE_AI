@@ -88,9 +88,18 @@ from app.models.macro_data import MacroData
 from app.models.news_calendar_event import NewsCalendarEvent
 from app.services.session_classifier import classify_session
 
-FEATURE_SCHEMA_VERSION = 2
+FEATURE_SCHEMA_VERSION = 3
 
 # ── LOCKED FEATURE CONTRACT ──────────────────────────────────────────────────
+# v3 (2026-09-19): SAME 19 MODEL KEYS AS v2 — the bump is about MEANING, not names.
+#   `c3_structure` moved from centred swing pivots to a trailing Donchian channel,
+#   and the live indicator writer was fixed so `swing_*` is populated at all. Both
+#   change what `c3_structure` and `swing_dist_atr` VALUE, while every key name stays
+#   identical — precisely the case provenance.py warns that nothing else would catch.
+#   Measured before the fix: c3_structure true on 20.0% of backtest rows vs 0.0% of
+#   live rows; swing_dist_atr median 2.724 backtest vs 4.431 live (+63%). Models v1-v3
+#   were trained on the leaked/skewed values, so `inference._validate_schema_version`
+#   refusing to load them against a v3 contract is the intended outcome, not collateral.
 # v2 (Research Cycle 2): MODEL tier = 19 keys. Dropped the four news_high_impact_*
 #   booleans DOWN to the SHAP-GATE tier (they gate trades, they do not train v1);
 #   promoted us_real_10y UP into the model tier; added wti + wti_change_20d (global

@@ -117,8 +117,13 @@ def inst(instrument):
 
 
 @pytest.fixture()
-def model(settings):
-    return inf.load_model(settings)
+def model(champion_artifact):
+    """The live champion artifact — skips while no artifact matches the contract.
+
+    See ``conftest.champion_artifact``: between a feature-schema bump and the first
+    retrain, refusing to load is correct behaviour, so these tests skip rather than fail.
+    """
+    return champion_artifact
 
 
 @pytest.fixture()
@@ -1025,7 +1030,9 @@ def test_challenger_records_its_own_verdict_without_governing(
         db.commit()
 
 
-def test_a_broken_challenger_never_breaks_the_live_path(db, settings, inst, signal, features):
+def test_a_broken_challenger_never_breaks_the_live_path(
+    db, settings, inst, signal, features, champion_artifact
+):
     """A challenger that will not load is a research inconvenience. The champion still
     has to score the signal and the row still has to be written — otherwise adding a
     challenger would be strictly more dangerous than not bothering.
@@ -1044,8 +1051,7 @@ def test_a_broken_challenger_never_breaks_the_live_path(db, settings, inst, sign
     )
     assert missing is None, "an unloadable artifact must be dropped, not raised"
 
-    champion = inf.load_model(settings)
-    written = _record(db, settings, inst, signal, features, champion)
+    written = _record(db, settings, inst, signal, features, champion_artifact)
 
     assert written is not None, "a missing challenger took down the live write path"
     assert written.ml_decision is not None, "the champion's verdict was lost"

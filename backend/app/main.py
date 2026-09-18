@@ -244,6 +244,19 @@ def _check_ml_model(settings: Settings) -> ComponentHealth:
         return ComponentHealth(
             status=HEALTH_OK, detail=f"model_id={loaded.model_id} promoted={loaded.promoted}"
         )
+    except inf.FeatureContractMismatch as exc:
+        # DEGRADED, not UNHEALTHY. The artifacts on disk predate a deliberate feature
+        # schema bump and the first model trained against the new contract does not
+        # exist yet. The platform is still doing most of its job — rules fire, rows are
+        # recorded, outcomes resolve — it just has no model opinion to attach, which is
+        # exactly the intended state mid-migration.
+        #
+        # This matters beyond tidiness: Dockerfile's HEALTHCHECK urlopen()s /health, and
+        # a 503 would park the container at `(unhealthy)` for the whole retraining
+        # window, burying any REAL fault that appeared during it.
+        return ComponentHealth(
+            status=HEALTH_DEGRADED, detail=f"awaiting a model on the current contract: {exc}"
+        )
     except Exception as exc:  # noqa: BLE001 — shadow enabled + no model = not doing its job
         return ComponentHealth(
             status=HEALTH_UNHEALTHY, detail=f"{type(exc).__name__}: {exc}"

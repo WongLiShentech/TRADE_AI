@@ -42,6 +42,25 @@ def _clear_artifact_cache():
     inf.reset_cache()
 
 
+@pytest.fixture(autouse=True)
+def _require_an_artifact_on_the_live_contract(settings):
+    """Skip this module while no artifact matches the live feature contract.
+
+    Nearly every test here loads the configured artifact to assert something about
+    scoring or the safety guards. After a ``FEATURE_SCHEMA_VERSION`` bump and before the
+    first retrain, every artifact on disk describes the old contract and refusing to load
+    one is the behaviour under test elsewhere — not a failure of these.
+
+    Only ``FeatureContractMismatch`` skips; a missing or corrupt artifact still fails.
+    """
+    try:
+        inf.load_model(settings)
+    except inf.FeatureContractMismatch as exc:
+        pytest.skip(f"no artifact matches the live feature contract: {exc}")
+    finally:
+        inf.reset_cache()
+
+
 @pytest.fixture()
 def live_features(db, settings, instrument):
     """A real PIT feature dict for a real (instrument, signal_time)."""

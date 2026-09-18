@@ -68,6 +68,22 @@ _BACKEND_ROOT = Path(__file__).resolve().parents[3]
 _MODEL_SUFFIX = ".joblib"
 _METADATA_SUFFIX = ".metadata.json"
 
+
+class FeatureContractMismatch(RuntimeError):
+    """The artifact is intact but describes a different feature contract than the live one.
+
+    Distinguished from every other load failure because it means something operationally
+    different. A missing file, an unreadable pickle or a tripped promotion guard is a
+    FAULT — something is broken and a human should look now. A contract mismatch is the
+    EXPECTED, temporary state during a deliberate feature-schema migration: the artifacts
+    on disk predate the bump and the first model trained against the new contract does
+    not exist yet.
+
+    Both are correctly refused at load time. Only one of them should page anybody, so the
+    health check reports this as degraded rather than unhealthy — see ``main._check_ml_model``.
+    Raised rather than string-matched so the distinction cannot rot as messages are edited.
+    """
+
 # Process-level cache: the artifact is immutable on disk, so it is deserialized
 # once per process. Keyed by resolved path (a config change pointing at a
 # different artifact loads that artifact). Safety guards are re-checked on EVERY
@@ -372,7 +388,7 @@ def _validate_feature_contract(metadata: dict, path: Path) -> tuple[str, ...]:
     """
     keys = metadata.get("feature_keys_model") or metadata.get("feature_keys")
     if not keys:
-        raise RuntimeError(
+        raise FeatureContractMismatch(
             f"ML artifact '{path.name}' metadata declares no feature key list "
             "('feature_keys_model') — cannot verify training/serving parity, refusing to load"
         )
@@ -380,7 +396,7 @@ def _validate_feature_contract(metadata: dict, path: Path) -> tuple[str, ...]:
     missing = sorted(set(live) - set(keys))
     unexpected = sorted(set(keys) - set(live))
     if missing or unexpected or len(keys) != len(live):
-        raise RuntimeError(
+        raise FeatureContractMismatch(
             f"feature contract mismatch for ML artifact '{path.name}': "
             f"artifact declares {len(keys)} keys, live feature_builder.FEATURE_KEYS_MODEL "
             f"declares {len(live)}. "
@@ -396,12 +412,12 @@ def _validate_schema_version(metadata: dict, path: Path) -> None:
     """Assert artifact feature_schema_version == live FEATURE_SCHEMA_VERSION."""
     raw = metadata.get("feature_schema_version")
     if raw is None:
-        raise RuntimeError(
+        raise FeatureContractMismatch(
             f"ML artifact '{path.name}' metadata declares no 'feature_schema_version' — "
             "refusing to load"
         )
     if int(raw) != int(FEATURE_SCHEMA_VERSION):
-        raise RuntimeError(
+        raise FeatureContractMismatch(
             f"feature_schema_version mismatch for ML artifact '{path.name}': "
             f"artifact=v{int(raw)}, live feature_builder=v{int(FEATURE_SCHEMA_VERSION)}. "
             "The same key names can carry different semantics across schema versions — "

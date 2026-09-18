@@ -76,7 +76,8 @@ class Settings(BaseSettings):
     STREAM_HEARTBEAT_TIMEOUT_SECONDS: int
 
     # Indicator engine (M4)
-    SWING_LOOKBACK_PERIODS: int  # candles either side for swing high/low detection
+    SWING_LOOKBACK_PERIODS: int  # candles either side for swing high/low detection (CENTRED — see models/indicator.py)
+    SIGNAL_DONCHIAN_PERIOD: int  # trailing bars for the Donchian channel (causal; backs c3_structure)
 
     # Vault (Part 1) — server-side wiki ingestion writes journal here
     VAULT_PATH: str

@@ -212,26 +212,33 @@ class RuleBasedSignalEngine(SignalEngine):
         spread_pips = spread / inst.pip_size if inst.pip_size else float("inf")
         c5_spread_ok = spread_pips < settings.SIGNAL_MAX_SPREAD_PIPS
 
-        # Recent swing context (look back over last 20 indicator rows for this instrument)
-        recent_indicators = (
-            _as_of_filter_ind(
-                db.query(Indicator).filter_by(instrument_id=inst.id, granularity=granularity),
-                as_of,
-            )
-            .order_by(Indicator.timestamp.desc())
-            .limit(20)
-            .all()
-        )
-        recent_swing_lows = [ind.swing_low for ind in recent_indicators if ind.swing_low is not None]
-        recent_swing_highs = [ind.swing_high for ind in recent_indicators if ind.swing_high is not None]
+        # ── C3 structure: Donchian channel, NOT swing pivots ──────────────────
+        # This previously read `swing_high`/`swing_low` off the newest 20 indicator
+        # rows. Those come from a CENTRED window, so the value at bar i is decided by
+        # bars up to i+k — unknowable at i. With SWING_LOOKBACK_PERIODS = 20 and this
+        # query's old `.limit(20)`, the rows read here were EXACTLY the rows
+        # feature_builder.causal_swing_levels discards as unusable (LEAK-1): total
+        # look-ahead in backtest, and a condition that could never fire live (measured:
+        # c3_structure true on 20.0% of backtest rows and 0.0% of live rows).
+        #
+        # A Donchian extreme over a trailing window including the current bar is
+        # knowable at its own close, so the same "is price at structure?" question is
+        # answered causally. `donchian_*` is on the SAME indicator row already loaded
+        # above — no extra query.
+        donchian_high = latest_ind.donchian_high
+        donchian_low = latest_ind.donchian_low
 
         atr_buffer = settings.SIGNAL_STRUCTURE_ATR_BUFFER * atr14
 
         # ── Score BUY ────────────────────────────────────────────────────────
         buy_c1_trend = d1_last_close > d1_sma
         buy_c2_rsi = settings.SIGNAL_RSI_OVERSOLD <= rsi14 <= settings.SIGNAL_RSI_OVERBOUGHT
-        buy_c3_structure = any(
-            abs(latest_h4.low - sl) <= atr_buffer for sl in recent_swing_lows
+        # Distance from the trailing N-bar low, in ATR units. A NULL channel means
+        # "not computed for this bar" (pre-backfill, or inside the warmup) and must read
+        # as False — an unevaluable condition is never a satisfied one.
+        buy_c3_structure = (
+            donchian_low is not None
+            and (latest_h4.close - donchian_low) <= atr_buffer
         )
         buy_breakdown = {
             "trend": buy_c1_trend,
@@ -247,8 +254,9 @@ class RuleBasedSignalEngine(SignalEngine):
         sell_c2_rsi = (
             settings.SIGNAL_RSI_OVERSOLD_SELL <= rsi14 <= settings.SIGNAL_RSI_OVERBOUGHT_SELL
         )
-        sell_c3_structure = any(
-            abs(latest_h4.high - sh) <= atr_buffer for sh in recent_swing_highs
+        sell_c3_structure = (
+            donchian_high is not None
+            and (donchian_high - latest_h4.close) <= atr_buffer
         )
         sell_breakdown = {
             "trend": sell_c1_trend,

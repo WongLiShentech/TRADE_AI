@@ -53,11 +53,21 @@ def test_contract_keys_exact(db, settings, instrument):
         assert k in feats
 
 
-def test_contract_v2_exact_tiers():
-    """v2 tier membership + counts are locked: 19 model / 10 gated / 9 payload.
-    Research Cycle 2 promoted us_real_10y + wti + wti_change_20d INTO the model tier
-    and dropped the four news_high_impact_* booleans DOWN to the gated tier."""
-    assert FEATURE_SCHEMA_VERSION == 2
+def test_contract_v3_exact_tiers():
+    """v3 tier membership + counts are locked: 19 model / 10 gated / 9 payload.
+
+    v3 carries the SAME 19 model keys as v2 — the bump was about MEANING, not names.
+    ``c3_structure`` moved from centred swing pivots (unknowable at their own timestamp,
+    so a look-ahead in backtest and never populated live) to a trailing Donchian channel,
+    and the live indicator writer was fixed so ``swing_*`` is written at all. Both change
+    what ``c3_structure`` and ``swing_dist_atr`` VALUE while every key name stays put —
+    which is exactly the case a schema version exists to catch, since nothing downstream
+    compares values.
+
+    Research Cycle 2 (v2) promoted us_real_10y + wti + wti_change_20d INTO the model tier
+    and dropped the four news_high_impact_* booleans DOWN to the gated tier.
+    """
+    assert FEATURE_SCHEMA_VERSION == 3
     assert len(FEATURE_KEYS_MODEL) == 19, FEATURE_KEYS_MODEL
     assert len(FEATURE_KEYS_GATED) == 10, FEATURE_KEYS_GATED
     assert len(PAYLOAD_KEYS) == 9, PAYLOAD_KEYS

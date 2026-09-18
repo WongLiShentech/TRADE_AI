@@ -158,6 +158,27 @@ def corpus_strategy_id(db) -> int:
 
 
 @pytest.fixture()
+def champion_artifact(settings):
+    """The configured artifact, or a skip when none matches the live feature contract.
+
+    Between a ``FEATURE_SCHEMA_VERSION`` bump and the first retrain against it, every
+    artifact on disk describes the OLD contract and ``inference`` correctly refuses to
+    load any of them. That is the intended state, not a broken suite — so tests that
+    genuinely need a loadable model skip, while everything that does not keeps running.
+
+    Deliberately narrow: ONLY ``FeatureContractMismatch`` skips. A missing file, an
+    unreadable pickle or a tripped promotion guard still fails loudly, because those are
+    faults rather than a migration in progress.
+    """
+    from app.services.ml import inference as inf
+
+    try:
+        return inf.load_model(settings)
+    except inf.FeatureContractMismatch as exc:
+        pytest.skip(f"no artifact matches the live feature contract: {exc}")
+
+
+@pytest.fixture()
 def instrument(db):
     def _load(symbol: str) -> Instrument:
         inst = db.query(Instrument).filter_by(symbol=symbol).first()
