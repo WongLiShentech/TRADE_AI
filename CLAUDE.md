@@ -331,6 +331,11 @@ class Settings(BaseSettings):
     # ML inference + shadow mode (M8-Shadow)
     SHADOW_MODE_ENABLED: bool                # record model decisions on live signals
     ORDER_PLACEMENT_ENABLED: bool            # HARD SAFETY FLAG — false = no order ever reaches a broker
+    # ⚠️ The LIVE path no longer reads these two. Which model serves which strategy —
+    # and at what threshold — is resolved from the `models` table (status + strategy_id
+    # + decision_threshold) by `ml/registry.py`, because a model is valid ONLY for the
+    # strategy whose outcomes taught it and a single global artifact cannot express that.
+    # They remain for CLI tooling that addresses one artifact directly (inference.load_model).
     ML_MODEL_PATH: str                       # artifact path, relative to backend/
     ML_DECISION_THRESHOLD: float             # P(win) >= this → 'take'
     ML_ALLOW_UNPROMOTED_MODEL: bool          # allow loading a .NOT_PROMOTED artifact (shadow only)
@@ -423,7 +428,19 @@ app/services/
                                model registry backfill: scripts/backfill_models.py;
                                run/dataset lineage: scripts/backfill_lineage.py;
                                a late-joining model's verdicts over past shadow rows:
-                               scripts/backfill_model_decisions.py — always is_authoritative=false)
+                               scripts/backfill_model_decisions.py — always is_authoritative=false;
+                               register/backtest a strategy: scripts/register_strategy.py,
+                               scripts/backtest_strategy.py — both driven by the strategy's OWN
+                               stored params, never an env var poked before import)
+├── ml/registry.py           ← models_for_strategy() → the champion + challengers serving ONE
+│                              strategy, resolved from models.status + models.strategy_id.
+│                              A model is valid only for the strategy whose outcomes taught it
+│                              (labels derive from rr_actual, which depends on the exit rule);
+│                              this is what makes the RUNTIME obey the pairing the DB states.
+│                              Each model carries its own threshold, so a challenger is judged
+│                              at its own cut-off. Promotion = a status change on a row, not an
+│                              env edit. Lives DB-side on purpose: ml/inference.py is the
+│                              serving chokepoint and stays free of database imports.
 └── alerts/                  ← ABC + log (default) + email + telegram (both stubs)
 ```
 
@@ -448,7 +465,15 @@ models            ← registry of trained artifacts. A model is a FILE; the DB r
                     `rr_actual`, and `rr_actual` depends on the EXIT RULE — relabelling
                     one corpus under a pure-barrier exit instead of a trailing one flips
                     12.5% of the training set. A model is valid ONLY for the strategy
-                    whose outcomes taught it; this makes that pairing checkable.
+                    whose outcomes taught it; this makes that pairing checkable — and
+                    since 2026-09-18 ENFORCED: `ml/registry.py` resolves the live
+                    scorers from `status` + `strategy_id`, so a model can no longer
+                    issue verdicts on a strategy it was not trained on. `status` is
+                    therefore load-bearing, not descriptive: `champion` (exactly one
+                    per strategy — its verdict is authoritative and mirrored into
+                    `trades.ml_*`), `shadow` (challenger; records an opinion, governs
+                    nothing), `candidate`/`retired` (not loaded). `decision_threshold`
+                    is read per model, so a challenger is judged at its OWN cut-off.
                     `passed_gate` is nullable: v1 predates the gate, and "unknown" beats
                     inventing a verdict. Hyperparameters/SHAP/feature lists stay in the
                     artifact's `.metadata.json` — this table answers "what have we got?",
