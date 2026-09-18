@@ -124,9 +124,22 @@ def main() -> None:
         )
         print(f"\ncompleted in {elapsed / 60:.1f} min — {rows} backtest rows")
         print(json.dumps(
-            {k: v for k, v in (result or {}).items() if not isinstance(v, (dict, list))},
+            {
+                "run_id": result.run_id,
+                "passed": result.passed,
+                "decision_bars_evaluated": result.decision_bars_evaluated,
+                "signals_fired": result.signals_fired,
+                "trades_simulated": result.trades_simulated,
+                # The rejection counters are the diagnostic that matters: they say WHY
+                # a configuration produced the corpus size it did. `cooldown_or_open`
+                # dominating means the corpus is capped by position occupancy, not by
+                # the entry rule — which changes what loosening the rule can achieve.
+                "rejections": result.rejections,
+                "n_trials": result.n_trials,
+            },
             indent=2, default=str,
         ))
+        print(f"\ncombined OOS: {json.dumps(result.combined_oos, default=str)}")
     finally:
         db.close()
 
