@@ -82,6 +82,15 @@ Proceed? (yes / no / modify)
 - Keep reports concise — bullet points over paragraphs
 - Save all output files to the output folder
 - **Data leakage in ML training is never acceptable — walk-forward splits only, no random shuffle, no feature value from after the signal timestamp, no full-dataset normalization, 14-bar embargo between in-sample and OOS. Systematic NaN across old rows requires backfill before training.**
+- **A SIGNAL RULE is subject to the same leakage rules as a feature.** The leakage firewall
+  lived only in `feature_builder`, so `indicators.swing_*` — a CENTRED window, decided by bars
+  up to `i+k` and therefore unknowable at bar `i` — was correctly discarded for the
+  `swing_dist_atr` feature and read RAW by the signal engine's C3 condition. Measured cost:
+  `c3_structure` true on 20.0% of backtest rows and **0.0%** of live rows, on the condition
+  carrying the edge (+0.654R expectancy when true vs +0.044R when false). Before any condition
+  reads an indicator, know whether that indicator's window is centred or trailing; centred ones
+  must go through a causal accessor. Prefer a trailing statistic (Donchian) over a centred one
+  (swing pivot) in a rule, so the question cannot arise.
 - **Excursion data (`trades.mfe_r`/`mae_r`, everything in `trade_paths`) is post-signal by construction: valid as a LABEL, never as a FEATURE.** Train a model to *predict* how far a trade will run; never tell it how far this one ran. The one legal feature-side use is strictly point-in-time aggregates over trades that had already CLOSED before the signal being scored. Enforced by `tests/test_feature_builder.py::test_excursion_fields_are_never_model_features`, which guards the namespace rather than a fixed list.
 - Cite sources when doing research
 - **Zero hardcoding — no broker names, API keys, URLs, credentials, instrument pairs, asset classes, or magic strings anywhere in business logic**
@@ -279,7 +288,8 @@ class Settings(BaseSettings):
     SIGNAL_RSI_OVERSOLD_SELL: float                # SELL RSI band lower bound
     SIGNAL_RSI_OVERBOUGHT_SELL: float              # SELL RSI band upper bound
     SIGNAL_TREND_SMA_PERIOD: int                   # SMA period on D1 trend filter (50)
-    SIGNAL_STRUCTURE_ATR_BUFFER: float             # multiplier on ATR for swing-proximity test
+    SIGNAL_STRUCTURE_ATR_BUFFER: float             # multiplier on ATR for the C3 structure-proximity test
+    SIGNAL_DONCHIAN_PERIOD: int                    # trailing bars for the Donchian channel backing C3
     SIGNAL_MAX_SPREAD_PIPS: float                  # block signal if live spread exceeds this
     SIGNAL_SESSION_FILTER: str                     # comma list: london,ny,overlap
     SIGNAL_GRANULARITIES: str                      # comma list: H4 (Phase 1)
