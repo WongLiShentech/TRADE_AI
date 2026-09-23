@@ -191,3 +191,33 @@ def test_staleness_budget_is_derived_from_stream_config(settings):
         settings.STREAM_MAX_RECONNECT_RETRIES
     )
     assert main._price_staleness_budget_seconds(settings) == expected
+
+
+# ── startup guard: migration vs fault ────────────────────────────────────────
+def test_startup_allows_a_contract_mismatch_but_refuses_a_real_fault(settings, monkeypatch):
+    """A schema migration must not take the platform down; a broken artifact must.
+
+    `_assert_shadow_model_loadable` refuses to boot when the artifact will not load, so
+    the process can never "look healthy while recording zero shadow observations". That
+    is right for a missing file or an unreadable pickle — and WRONG for a deliberate
+    FEATURE_SCHEMA_VERSION bump, where artifacts predating the bump are supposed to be
+    refused and the intended state is rule-only rows until a model is retrained.
+
+    Learned the hard way: the health check drew this distinction, the startup guard did
+    not, and deploying the schema-3 engine crash-looped production.
+    """
+    from app.services.ml import inference as inf
+
+    def _mismatch(*_a, **_kw):
+        raise inf.FeatureContractMismatch("artifact=v2, live feature_builder=v3")
+
+    monkeypatch.setattr(inf, "load_model", _mismatch)
+    # Must NOT raise — rule-only operation is the intended migration state.
+    main._assert_shadow_model_loadable(settings)
+
+    def _broken(*_a, **_kw):
+        raise FileNotFoundError("models/gone.joblib")
+
+    monkeypatch.setattr(inf, "load_model", _broken)
+    with pytest.raises(RuntimeError, match="Refusing to start"):
+        main._assert_shadow_model_loadable(settings)

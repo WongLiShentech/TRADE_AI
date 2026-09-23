@@ -120,6 +120,25 @@ def _assert_shadow_model_loadable(settings: Settings) -> None:
         return
     try:
         loaded = inf.load_model(settings)
+    except inf.FeatureContractMismatch as exc:
+        # Start anyway, loudly. This is the intended state during a deliberate feature
+        # schema migration: artifacts on disk predate the bump and the first model on the
+        # new contract does not exist yet. The rule engine still fires, rows are still
+        # recorded (with ml_* NULL), outcomes still resolve — that evidence is exactly
+        # what the next model trains on, and refusing to boot would throw it away.
+        #
+        # The guard's actual purpose — "never look healthy while silently recording
+        # nothing" — is preserved by /health reporting DEGRADED for the same exception,
+        # so the condition stays visible without taking the platform down.
+        #
+        # Every OTHER load failure still refuses to start: a missing file, an unreadable
+        # pickle or a tripped promotion guard is a fault, not a migration.
+        logger.error(
+            "ML artifact does not match the live feature contract (%s). Starting in "
+            "RULE-ONLY mode: signals are recorded with ml_* NULL until a model is "
+            "trained on the current schema. /health will report degraded.", exc,
+        )
+        return
     except Exception as exc:
         raise RuntimeError(
             f"SHADOW_MODE_ENABLED=true but the ML artifact at ML_MODEL_PATH="
